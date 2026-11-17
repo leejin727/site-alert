@@ -1,0 +1,260 @@
+from contextlib import asynccontextmanager
+from datetime import date
+from typing import Optional
+
+from fastapi import Depends, FastAPI, HTTPException
+from sqlmodel import Session, delete, select
+
+from serve.db import get_session
+from serve.models import NoticeDeadline, Post, PostAnalysis, ReviewUpdate, Site, SiteCreate, Task, TaskBreakdown, TaskCreate, TaskUpdate
+from serve.reviews import save_memo, weekly_review
+from serve.rss import FeedError, check_site, create_site
+from serve.scheduler import check_all_sites, start_scheduler, stop_scheduler
+from serve.tasks import BreakdownError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_tasks, prepare_tasks, reschedule
+
+FIXED_USER_ID = 1  # alembic 0003에서 만든 사용자
+
+
+def current_user_id() -> int:
+    # shortcut: 로그인 전이라 모든 요청을 사용자 1로 처리, 로그인 단계에서 토큰으로 사용자를 찾도록 이 함수만 교체
+    return FIXED_USER_ID
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 테이블은 서버 시작 전에 `alembic upgrade head`로 만들어 둠
+    start_scheduler()   # 3단계: 서버가 켜지면 자동 확인 시작
+    yield
+    stop_scheduler()    # 서버가 꺼질 때 함께 정리
+
+
+app = FastAPI(title="사이트 알림 서버", lifespan=lifespan)
+
+
+@app.post("/sites", status_code=201)
+def register_site(data: SiteCreate, session: Session = Depends(get_session)):
+    rss_url = data.rss_url.strip()
+    if not rss_url.startswith(("http://", "https://")):
+        raise HTTPException(400, "RSS 주소는 http:// 또는 https:// 로 시작해야 합니다")
+    if session.exec(select(Site).where(Site.rss_url == rss_url)).first():
+        raise HTTPException(409, "이미 등록된 RSS 주소입니다")
+
+    try:
+        site, baseline = create_site(session, data.name.strip(), rss_url)
+    except FeedError as e:
+        raise HTTPException(400, f"RSS를 확인할 수 없습니다: {e}")
+    return {"site": site, "baseline_posts": len(baseline)}
+
+
+@app.get("/sites")
+def list_sites(session: Session = Depends(get_session)):
+    return session.exec(select(Site).order_by(Site.id)).all()
+
+
+@app.delete("/sites/{site_id}", status_code=204)
+def delete_site(site_id: int, session: Session = Depends(get_session)):
+    site = session.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "사이트를 찾을 수 없습니다")
+    post_ids = select(Post.id).where(Post.site_id == site_id)
+    # 글을 참조하는 테이블부터 삭제 (tasks는 마감도 참조하므로 마감보다 먼저)
+    session.exec(delete(Task).where(Task.notice_id.in_(post_ids)))
+    session.exec(delete(TaskBreakdown).where(TaskBreakdown.notice_id.in_(post_ids)))
+    session.exec(delete(NoticeDeadline).where(NoticeDeadline.notice_id.in_(post_ids)))
+    session.exec(delete(PostAnalysis).where(PostAnalysis.post_id.in_(post_ids)))
+    session.exec(delete(Post).where(Post.site_id == site_id))
+    session.delete(site)
+    session.commit()
+
+
+@app.post("/sites/{site_id}/check")
+def check_now(site_id: int, session: Session = Depends(get_session)):
+    """테스트용: 지금 바로 확인. 3단계에서 스케줄러가 같은 함수를 주기적으로 호출."""
+    site = session.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "사이트를 찾을 수 없습니다")
+    try:
+        new_posts = check_site(session, site)
+    except FeedError as e:
+        raise HTTPException(502, f"확인 실패: {e}")
+    return {"new_count": len(new_posts), "new_posts": new_posts}
+
+
+@app.post("/check-all")
+def check_all_now():
+    """테스트용: 스케줄러가 하는 '전체 확인'을 지금 바로 1회 실행."""
+    return check_all_sites()
+
+
+@app.get("/posts")
+def list_posts(
+    site_id: Optional[int] = None,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+):
+    query = select(Post).order_by(Post.detected_at.desc(), Post.id.desc()).limit(min(limit, 200))
+    if site_id is not None:
+        query = query.where(Post.site_id == site_id)
+    return session.exec(query).all()
+
+
+@app.get("/notices")
+def list_notices(
+    site_id: Optional[int] = None,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """공지 카드 목록. 분석 전인 공지도 포함 (analyzed=false)."""
+    query = (
+        select(Post, Site.name, PostAnalysis)
+        .join(Site, Post.site_id == Site.id)
+        .outerjoin(PostAnalysis, PostAnalysis.post_id == Post.id)
+        .order_by(Post.detected_at.desc(), Post.id.desc())
+        .limit(min(limit, 200))
+    )
+    if site_id is not None:
+        query = query.where(Post.site_id == site_id)
+    rows = session.exec(query).all()
+    ids = [post.id for post, _, _ in rows]
+    # shortcut: '오늘'은 서버 시간대 기준, 사용자 시간대가 서버와 다를 수 있으면 요청에서 받기
+    next_deadline = {}
+    for d in session.exec(
+        select(NoticeDeadline)
+        .where(NoticeDeadline.notice_id.in_(ids), NoticeDeadline.deadline_date >= date.today())
+        .order_by(NoticeDeadline.deadline_date, NoticeDeadline.deadline_time)
+    ).all():
+        next_deadline.setdefault(d.notice_id, d)
+    saved = set(session.exec(
+        select(Task.notice_id).where(Task.user_id == user_id, Task.notice_id.in_(ids), Task.status == "confirmed")
+    ).all())
+    return [
+        {
+            "id": post.id, "title": post.title, "link": post.link, "board": board, "published": post.published,
+            "analyzed": analysis is not None,
+            "summary": analysis.result.get("summary") if analysis else None,
+            "apply_method": analysis.result.get("apply_method") if analysis else None,
+            "next_deadline": next_deadline.get(post.id),
+            "saved": post.id in saved,
+        }
+        for post, board, analysis in rows
+    ]
+
+
+def get_post(session: Session, notice_id: int) -> Post:
+    post = session.get(Post, notice_id)
+    if not post:
+        raise HTTPException(404, "공지를 찾을 수 없습니다")
+    return post
+
+
+def get_my_task(session: Session, task_id: int, user_id: int) -> Task:
+    task = session.get(Task, task_id)
+    if not task or task.user_id != user_id:
+        raise HTTPException(404, "할 일을 찾을 수 없습니다")
+    return task
+
+
+@app.get("/tasks")
+def my_tasks(session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    """'내 할 일': 저장(confirmed)한 할 일을 마감이 가까운 순으로. 완료한 것도 포함 (is_done으로 구분)."""
+    return list_confirmed_tasks(session, user_id)
+
+
+@app.post("/notices/{notice_id}/tasks")
+def create_tasks(
+    notice_id: int,
+    regenerate: bool = False,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """'이거 할래' 미리보기: 할 일을 draft로 만들고, 미리보기에 필요한 마감·신청 방식(근거 포함)·unclear와 함께 반환.
+
+    할 일이 이미 있으면(저장한 공지 포함) 그대로 반환하고 Gemini를 다시 부르지 않음. '저장'은 /confirm. 처음 분해하는 공지면 10초 안팎 걸림. regenerate=true면 다시 분해.
+    """
+    post = get_post(session, notice_id)
+    try:
+        return prepare_tasks(session, user_id, post, regenerate)
+    except NotAnalyzedError as e:
+        raise HTTPException(409, str(e))
+    except BreakdownError as e:
+        raise HTTPException(502, f"할 일 분해 실패: {e}")
+
+
+@app.post("/notices/{notice_id}/tasks/confirm")
+def confirm_notice_tasks(
+    notice_id: int,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """미리보기의 '저장': 이 공지의 내 draft 할 일을 모두 confirmed로 (이미 저장했으면 그대로)."""
+    return confirm_tasks(session, user_id, get_post(session, notice_id))
+
+
+@app.post("/notices/{notice_id}/tasks/items", status_code=201)
+def create_task_item(
+    notice_id: int,
+    data: TaskCreate,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """할 일 직접 추가 (근거 없음)."""
+    post = get_post(session, notice_id)
+    try:
+        return add_task(session, user_id, post, data.title, data.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    task = get_my_task(session, task_id, user_id)
+    session.delete(task)
+    reschedule(session, user_id, task.notice_id)
+    session.commit()
+
+
+@app.patch("/tasks/{task_id}")
+def update_task(
+    task_id: int,
+    data: TaskUpdate,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    task = get_my_task(session, task_id, user_id)
+    try:
+        apply_update(task, data.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@app.get("/reviews/weekly")
+def get_weekly_review(
+    week: Optional[date] = None,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """주간 회고: week(그 주의 아무 날짜, 없으면 오늘)가 속한 주(일~토)의 완료율·못 끝낸 할 일·메모."""
+    return weekly_review(session, user_id, week)
+
+
+@app.put("/reviews/weekly")
+def put_weekly_review(
+    data: ReviewUpdate,
+    week: Optional[date] = None,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """회고 메모 저장 (그 주에 이미 있으면 덮어씀, 비우면 null). 저장 후 회고 전체를 반환."""
+    try:
+        return save_memo(session, user_id, week, data.memo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
