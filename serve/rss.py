@@ -1,6 +1,7 @@
 """1단계 check_rss.py의 수집 로직을 서버용으로 옮긴 모듈."""
+import base64
 import re
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import feedparser
 import requests
@@ -18,10 +19,29 @@ BOARD_NAMES = {
     "141": "일반공지", "142": "행사공지", "143": "학사공지",
     "145": "장학/학자금공지", "146": "진로/취업/창업공지", "853": "학생활동공지",
 }
+# 게시판 번호 → 홈페이지 메뉴 번호. https://www.mju.ac.kr/mjukr/<메뉴 번호>/subview.do 가 그 게시판을 담고 있음
+BOARD_MENUS = {
+    "141": "255", "142": "256", "143": "257", "145": "259",
+    "146": "260", "147": "261", "853": "5364", "1342": "8972",
+}
+HOMEPAGE_PATTERN = re.compile(r"^https?://www\.mju\.ac\.kr(/bbs/mjukr/(\d+)/\d+/artclView\.do)")
 
 
 class FeedError(Exception):
     """RSS를 가져오거나 해석하지 못했을 때."""
+
+
+def homepage_url(link: str) -> str:
+    """'원문 보기'용 주소. 저장된 링크(artclView.do)는 학교 틀이 없는 본문 전용이라, 홈페이지에서 보는 주소로 바꿈.
+
+    홈페이지는 본문 경로를 enc에 담음: base64("fnct1|@@|" + URL 인코딩한 경로). 메뉴 번호를 모르는 게시판은 그대로 돌려줌.
+    """
+    match = HOMEPAGE_PATTERN.match(link)
+    menu = BOARD_MENUS.get(match.group(2)) if match else None
+    if not menu:
+        return link
+    enc = base64.b64encode(f"fnct1|@@|{quote(match.group(1) + '?', safe='')}".encode()).decode()
+    return f"https://www.mju.ac.kr/mjukr/{menu}/subview.do?enc={quote(enc, safe='')}"
 
 
 def fetch_posts(rss_url: str) -> list[dict]:

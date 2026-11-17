@@ -10,7 +10,7 @@ from sqlmodel import Session, delete, select
 from serve.db import get_session
 from serve.models import NoticeDeadline, Post, PostAnalysis, ReviewUpdate, Site, SiteCreate, Task, TaskBreakdown, TaskCreate, TaskUpdate
 from serve.reviews import save_memo, weekly_review
-from serve.rss import FeedError, check_site, create_site
+from serve.rss import FeedError, check_site, create_site, homepage_url
 from serve.scheduler import check_all_sites, start_scheduler, stop_scheduler
 from serve.tasks import BreakdownError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_tasks, prepare_tasks, reschedule
 
@@ -145,7 +145,7 @@ def list_notices(
     ).all())
     return [
         {
-            "id": post.id, "title": post.title, "link": post.link, "board": board, "published": post.published,
+            "id": post.id, "title": post.title, "link": homepage_url(post.link), "board": board, "published": post.published,
             "analyzed": analysis is not None,
             "summary": analysis.result.get("summary") if analysis else None,
             "apply_method": analysis.result.get("apply_method") if analysis else None,

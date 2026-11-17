@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from serve.models import Post, Task, WeeklyReview, now_utc
+from serve.rss import homepage_url
 from serve.schedule import today_kst
 
 MEMO_MAX_LENGTH = 2000
@@ -39,7 +40,7 @@ def weekly_review(session: Session, user_id: int, day: Optional[date]) -> dict:
         "unfinished": [
             {
                 "id": task.id, "title": task.title, "scheduled_date": task.scheduled_date,
-                "notice": {"id": post.id, "title": post.title, "link": post.link},
+                "notice": {"id": post.id, "title": post.title, "link": homepage_url(post.link)},
             }
             for task, post in rows if not task.is_done
         ],

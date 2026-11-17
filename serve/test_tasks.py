@@ -13,6 +13,7 @@ from serve.analyze import Deadline, NoticeAnalysis, save_analysis
 from serve.db import engine, get_session
 from serve.models import NoticeDeadline, Post, Site, Task, User, WeeklyReview, now_utc
 from serve.reviews import week_range
+from serve.rss import homepage_url
 from serve.schedule import plan_dates, today_kst
 from serve.tasks import BreakdownItem, BreakdownResult, delete_stale_drafts, validate_items
 
@@ -318,6 +319,21 @@ def test_weekly_review():
             tx.rollback()
 
 
+def test_homepage_url():
+    # 학교 일반공지 목록 페이지에 실제로 있던 링크와 같은 값
+    assert homepage_url("https://www.mju.ac.kr/bbs/mjukr/141/182143/artclView.do") == (
+        "https://www.mju.ac.kr/mjukr/255/subview.do"
+        "?enc=Zm5jdDF8QEB8JTJGYmJzJTJGbWp1a3IlMkYxNDElMkYxODIxNDMlMkZhcnRjbFZpZXcuZG8lM0Y%3D"
+    )
+    assert homepage_url("https://www.mju.ac.kr/bbs/mjukr/143/231868/artclView.do").startswith("https://www.mju.ac.kr/mjukr/257/subview.do?enc=")
+    for link in (
+        "https://www.mju.ac.kr/bbs/mjukr/999/1/artclView.do",  # 메뉴 번호를 모르는 게시판
+        "https://www.mju.ac.kr/bbs/other/141/1/artclView.do",  # 다른 사이트의 게시판
+        "https://example.com/1",
+    ):
+        assert homepage_url(link) == link
+
+
 def test_cors():
     client = TestClient(main.app)
 
@@ -345,5 +361,6 @@ if __name__ == "__main__":
     test_api()
     test_my_tasks()
     test_weekly_review()
+    test_homepage_url()
     test_cors()
     print("OK")

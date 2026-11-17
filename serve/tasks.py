@@ -19,6 +19,7 @@ from sqlmodel import Session, delete, func, select
 
 from serve.analyze import FALLBACK_MODEL, MODEL, load_body, run_with_retry
 from serve.models import NoticeDeadline, Post, PostAnalysis, Site, Task, TaskBreakdown, now_utc
+from serve.rss import homepage_url
 from serve.schedule import plan_dates, today_kst
 
 logger = logging.getLogger("uvicorn.error")
@@ -169,7 +170,7 @@ def prepare_tasks(session: Session, user_id: int, post: Post, regenerate: bool) 
         session.commit()
         mine = user_tasks(session, user_id, post.id)
     return {
-        "notice": {"id": post.id, "title": post.title, "link": post.link, "published": post.published},
+        "notice": {"id": post.id, "title": post.title, "link": homepage_url(post.link), "published": post.published},
         "apply_method": analysis.result.get("apply_method"),
         "apply_method_evidence": analysis.result.get("apply_method_evidence"),
         "deadlines": notice_deadlines(session, post.id),  # 커밋으로 만료된 객체는 응답에 빈 값으로 나가므로 다시 읽음
@@ -275,7 +276,7 @@ def list_confirmed_tasks(session: Session, user_id: int) -> list[dict]:
         items.append({
             "id": task.id, "title": task.title, "note": task.note, "is_done": task.is_done, "done_at": task.done_at,
             "source": task.source, "scheduled_date": task.scheduled_date,
-            "notice": {"id": post.id, "title": post.title, "link": post.link},
+            "notice": {"id": post.id, "title": post.title, "link": homepage_url(post.link)},
             "deadline": deadline and {
                 "id": deadline.id, "label": deadline.label, "deadline_date": deadline.deadline_date, "deadline_time": deadline.deadline_time,
             },
