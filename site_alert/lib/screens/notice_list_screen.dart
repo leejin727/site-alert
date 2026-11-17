@@ -1,8 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../models.dart';
 import 'task_preview_screen.dart';
+
+const contentMaxWidth = 720.0; // 넓은 화면(웹)에서 본문이 넘지 않을 폭
+
+/// 본문 좌우 여백. 휴대폰 폭에서는 16 그대로, 넓은 화면에서는 본문을 [contentMaxWidth]로 가운데에 모음.
+double contentInset(BuildContext context) {
+  final side = (MediaQuery.sizeOf(context).width - contentMaxWidth) / 2;
+  return side > 16 ? side : 16;
+}
 
 class NoticeListScreen extends StatefulWidget {
   const NoticeListScreen({super.key, required this.api});
@@ -50,7 +59,17 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('공지')),
+      appBar: AppBar(
+        title: const Text('공지'),
+        actions: [
+          if (kIsWeb) // 마우스로는 당겨서 새로고침이 안 됨
+            IconButton(
+              tooltip: '새로고침',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+        ],
+      ),
       body: FutureBuilder<List<NoticeCard>>(
         future: _future,
         builder: (context, snapshot) {
@@ -74,7 +93,10 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
                     ],
                   )
                 : ListView.separated(
-                    padding: const EdgeInsets.all(16),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: contentInset(context),
+                      vertical: 16,
+                    ),
                     itemCount: notices.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (_, i) => NoticeCardView(

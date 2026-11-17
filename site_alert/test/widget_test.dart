@@ -102,6 +102,28 @@ void main() {
   myTasksTests();
   weeklyReviewTests();
 
+  testWidgets('본문 폭: 휴대폰은 좌우 16 여백 그대로, 넓은 화면은 720으로 가운데', (tester) async {
+    final client = MockClient((request) async => jsonResponse(notices));
+    Future<Rect> cardRect(Size logicalSize) async {
+      tester.view.physicalSize = logicalSize;
+      tester.view.devicePixelRatio = 1.0;
+      await tester.pumpWidget(
+        MyApp(
+          api: ApiClient(client: client, baseUrl: 'http://test'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return tester.getRect(find.byType(Card).first);
+    }
+
+    addTearDown(tester.view.reset);
+    final phone = await cardRect(const Size(402, 874));
+    expect((phone.left, phone.right), (16, 386));
+    final wide = await cardRect(const Size(1440, 900));
+    expect((wide.left, wide.right), (360, 1080));
+    expect(find.byTooltip('새로고침'), findsNothing); // 웹에서만 보이는 버튼
+  });
+
   test('서버 주소: 안드로이드는 10.0.2.2, iOS 등은 127.0.0.1', () {
     expect(
       ApiClient.defaultBaseUrl(platform: TargetPlatform.android),

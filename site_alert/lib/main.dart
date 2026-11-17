@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
@@ -17,9 +18,15 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'notice',
+      title: '이거할래',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo),
+      theme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        // 웹은 한글 폰트가 없어 실행 중에 내려받으므로 내장 폰트를 씀. 휴대폰은 기기 기본 폰트 그대로.
+        fontFamily: kIsWeb ? 'GowunDodum' : null,
+        // 웹은 본문을 가운데로 모으므로 제목도 버튼 수와 상관없이 가운데에 둠
+        appBarTheme: kIsWeb ? const AppBarTheme(centerTitle: true) : null,
+      ),
       home: HomeShell(api: api, today: today),
     );
   }

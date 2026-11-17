@@ -1,8 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../models.dart';
-import 'notice_list_screen.dart' show ErrorView, InfoChip;
+import 'notice_list_screen.dart' show ErrorView, InfoChip, contentInset;
 import 'task_preview_screen.dart';
 import 'weekly_review_screen.dart';
 
@@ -97,6 +98,12 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
       appBar: AppBar(
         title: const Text('내 할 일'),
         actions: [
+          if (kIsWeb) // 마우스로는 당겨서 새로고침이 안 됨
+            IconButton(
+              tooltip: '새로고침',
+              onPressed: _load,
+              icon: const Icon(Icons.refresh),
+            ),
           TextButton.icon(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(
@@ -142,7 +149,10 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
       onTap: () => _openNotice(t),
     );
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(
+        horizontal: contentInset(context),
+        vertical: 16,
+      ),
       children: [
         if (todo.isEmpty)
           const Padding(

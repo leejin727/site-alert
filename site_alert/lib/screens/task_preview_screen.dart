@@ -4,7 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../models.dart';
-import 'notice_list_screen.dart' show ErrorView;
+import 'notice_list_screen.dart' show ErrorView, contentInset;
 
 /// '이거 할래' 미리보기: 화면을 열면 서버가 할 일을 draft로 만들고(POST), 고친 내용은 바로 반영(PATCH).
 /// '저장'을 눌러야 confirmed가 되어 '담은 할 일'이 됨 (true를 돌려주면 목록에서 안내 표시).
@@ -164,6 +164,7 @@ class _TaskPreviewScreenState extends State<TaskPreviewScreen> {
   Widget build(BuildContext context) {
     final preview = _preview;
     final busy = _busy.isNotEmpty || _adding || _confirming;
+    final inset = contentInset(context);
     return Scaffold(
       appBar: AppBar(title: const Text('이거 할래')),
       body: _error != null
@@ -174,7 +175,7 @@ class _TaskPreviewScreenState extends State<TaskPreviewScreen> {
       // 원문 링크는 로딩·오류 중에도 항상 보이게
       bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          padding: EdgeInsets.fromLTRB(inset, 8, inset, 16),
           child: Row(
             children: [
               Expanded(
@@ -218,7 +219,10 @@ class _TaskPreviewScreenState extends State<TaskPreviewScreen> {
     final deadlineLabels = {for (final d in preview.deadlines) d.id: d.label};
     final unclear = preview.unclearLabels;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(
+        horizontal: contentInset(context),
+        vertical: 16,
+      ),
       children: [
         Text(preview.title, style: theme.textTheme.titleLarge),
         if (unclear.isNotEmpty) ...[

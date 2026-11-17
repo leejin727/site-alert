@@ -1,11 +1,11 @@
 {
-    "name": "site_alert",
-    "short_name": "site_alert",
+    "name": "이거할래",
+    "short_name": "이거할래",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "명지대 공지를 내 할 일로 바꿔주는 AI 학사 플래너",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

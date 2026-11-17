@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../models.dart';
 import 'my_tasks_screen.dart' show monthDay;
-import 'notice_list_screen.dart' show ErrorView;
+import 'notice_list_screen.dart' show ErrorView, contentInset;
 
 /// 주간 회고: 그 주(일~토)에 하기로 한 할 일의 완료율, 끝내지 못한 일, 회고 메모.
 /// 처음엔 이번 주를 열고 ← → 로 지난 주를 오감 (이번 주보다 뒤로는 못 감).
@@ -128,7 +128,10 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
     final theme = Theme.of(context);
     final isThisWeek = review.weekStart == _thisWeek;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(
+        horizontal: contentInset(context),
+        vertical: 16,
+      ),
       children: [
         Row(
           children: [
