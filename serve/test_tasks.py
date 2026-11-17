@@ -318,10 +318,32 @@ def test_weekly_review():
             tx.rollback()
 
 
+def test_cors():
+    client = TestClient(main.app)
+
+    def preflight(origin):
+        return client.options("/tasks/1", headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "content-type",
+        })
+
+    for origin in ("http://localhost:53124", "http://127.0.0.1:8765", "http://localhost"):
+        res = preflight(origin)
+        assert res.status_code == 200, origin
+        assert res.headers["access-control-allow-origin"] == origin
+        assert "PATCH" in res.headers["access-control-allow-methods"]
+    for origin in ("https://evil.example.com", "http://localhost.evil.example.com", "http://127.0.0.1.evil.example.com:8000"):
+        res = preflight(origin)
+        assert res.status_code == 400, origin
+        assert "access-control-allow-origin" not in res.headers
+
+
 if __name__ == "__main__":
     test_validate_items()
     test_plan_dates()
     test_api()
     test_my_tasks()
     test_weekly_review()
+    test_cors()
     print("OK")

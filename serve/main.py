@@ -1,8 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, delete, select
 
 from serve.db import get_session
@@ -29,6 +31,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="사이트 알림 서버", lifespan=lifespan)
+
+# 웹 앱(브라우저)에서 부르기 위한 CORS. `flutter run -d chrome`은 실행할 때마다 포트가 바뀌어 로컬 주소는 포트와 무관하게 허용.
+# 배포한 웹 주소는 CORS_ORIGINS에 쉼표로 구분해 적음 (예: https://app.example.com)
+LOCAL_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=LOCAL_ORIGIN_REGEX,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/sites", status_code=201)
