@@ -3,14 +3,13 @@
 Gemini는 마감 날짜를 읽기만 하고, 마감에서 거꾸로 날짜를 정하는 계산은 여기서 코드로 합니다.
 """
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 TODAY_METHODS = {"선착순"}  # 이 신청 방식이면 남은 할 일을 모두 오늘로. 그 외(기간 내 제출·선발·신청 없음·불명확)는 마감에서 역산
 BACKWARD_START_DAYS = 3     # 마감 며칠 전에 마지막 할 일을 둘지
 BACKWARD_STEP_DAYS = 1      # 그 앞의 할 일은 며칠 간격으로 거꾸로 둘지
-TIMEZONE = ZoneInfo("Asia/Seoul")
+TIMEZONE = timezone(timedelta(hours=9))  # 한국 시간. 서머타임이 없어 고정값으로 둠 (서버에 시간대 데이터가 없어도 동작)
 
 
 def today_kst() -> date:

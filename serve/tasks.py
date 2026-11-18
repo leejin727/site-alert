@@ -6,6 +6,7 @@
 import logging
 import os
 import re
+import threading
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, delete, func, select
 
+from serve import PRODUCTION
 from serve.analyze import FALLBACK_MODEL, MODEL, load_body, run_with_retry
 from serve.models import NoticeDeadline, Post, PostAnalysis, Schedule, Site, Task, TaskBreakdown, now_utc
 from serve.rss import homepage_url
@@ -31,6 +33,11 @@ TASK_PROMPT = (Path(__file__).with_name("prompts") / "tasks" / f"{TASK_PROMPT_VE
 TASK_MODEL = os.getenv("TASK_GEMINI_MODEL", FALLBACK_MODEL)
 IMAGE_PREFIX = "(이미지)"  # 이미지에서 읽은 근거는 원문 텍스트가 없어 대조할 수 없음
 EDITABLE_FIELDS = ("title", "note", "scheduled_date")  # 바꾸면 edited_fields에 기록 (is_done은 일반 사용이라 제외)
+# 로그인이 없는 배포 서버에서 Gemini 사용량을 지키는 하루(한국 날짜) 호출 상한. None이면 제한 없음(로컬)
+DAILY_LIMIT: Optional[int] = int(os.getenv("TASK_DAILY_LIMIT") or "50") if PRODUCTION else None
+# shortcut: 횟수를 메모리에만 둬서 서버가 재시작하면 0부터 다시 셈 (worker 1개 전제), 정확해야 하면 DB에 기록
+_calls = {"day": None, "count": 0}
+_calls_lock = threading.Lock()
 
 
 class BreakdownItem(BaseModel):
@@ -49,6 +56,23 @@ class NotAnalyzedError(Exception):
 
 class BreakdownError(Exception):
     """Gemini로 할 일 분해를 하지 못함."""
+
+
+class DailyLimitError(Exception):
+    """오늘 할 일 분해(Gemini 호출) 횟수를 모두 씀."""
+
+
+def count_breakdown_call() -> None:
+    """Gemini를 부르기 직전에 호출해 오늘 횟수를 1 늘림. 이미 상한이면 DailyLimitError"""
+    if DAILY_LIMIT is None:
+        return
+    with _calls_lock:
+        today = today_kst()
+        if _calls["day"] != today:
+            _calls.update(day=today, count=0)
+        if _calls["count"] >= DAILY_LIMIT:
+            raise DailyLimitError("오늘은 새 공지를 할 일로 나눌 수 있는 횟수를 모두 썼어요. 내일 다시 시도해 주세요")
+        _calls["count"] += 1
 
 
 def format_deadlines(deadlines: list[NoticeDeadline]) -> str:
@@ -112,6 +136,7 @@ def generate_breakdown(session: Session, post: Post, analysis: PostAnalysis) -> 
         select(NoticeDeadline).where(NoticeDeadline.notice_id == post.id).order_by(NoticeDeadline.deadline_order)
     ).all()
     board = session.get(Site, post.site_id).name
+    count_breakdown_call()
     result, used_model, source_text = request_breakdown(post, board, analysis.result.get("apply_method", "불명확"), deadlines)
     kept = validate_items(post.id, result.tasks, source_text, len(deadlines))
     values = {
@@ -145,7 +170,7 @@ def prepare_tasks(session: Session, user_id: int, post: Post, regenerate: bool) 
     할 일이 이미 있으면(저장했거나, 저장 전 draft가 남아 있으면) 그대로 반환하고 Gemini를 부르지 않음.
     없으면 분해 결과를 draft로 복사 ('저장'을 눌러야 confirmed). 분해 결과가 없거나 regenerate=True면 Gemini 호출.
     regenerate=True면 완료·수정·직접 추가한 할 일은 남기고 나머지만 새 결과로 교체.
-    NotAnalyzedError, BreakdownError 발생 가능
+    NotAnalyzedError, BreakdownError, DailyLimitError 발생 가능
     """
     analysis = load_analysis(session, post)
     # 같은 사용자·공지 요청이 동시에 오면(응답이 늦어 다시 누른 경우) 뒤 요청은 앞 요청이 끝날 때까지 기다렸다가

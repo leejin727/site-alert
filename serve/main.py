@@ -1,12 +1,17 @@
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, time
+from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, delete, func, select
 
+from serve import PRODUCTION
 from serve.db import get_session
 from serve.models import (
     NoticeDeadline, Post, PostAnalysis, ReviewUpdate, Schedule, ScheduleCreate, ScheduleTaskCreate, ScheduleUpdate,
@@ -19,14 +24,28 @@ from serve.reviews import save_memo, weekly_review
 from serve.rss import FeedError, check_site, create_site, homepage_url
 from serve.schedule import today_kst
 from serve.scheduler import check_all_sites, start_scheduler, stop_scheduler
-from serve.tasks import BreakdownError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_deadlines, list_confirmed_tasks, prepare_tasks, reschedule
+from serve.tasks import BreakdownError, DailyLimitError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_deadlines, list_confirmed_tasks, prepare_tasks, reschedule
 
 FIXED_USER_ID = 1  # alembic 0003에서 만든 사용자
+ADMIN_KEY = os.getenv("ADMIN_KEY", "")
+WEB_DIR = Path(__file__).with_name("web")  # Flutter 웹 빌드 결과 (build_web.sh가 채움)
 
 
 def current_user_id() -> int:
     # shortcut: 로그인 전이라 모든 요청을 사용자 1로 처리, 로그인 단계에서 토큰으로 사용자를 찾도록 이 함수만 교체
     return FIXED_USER_ID
+
+
+def is_admin(x_admin_key: Optional[str] = Header(None)) -> bool:
+    """배포 서버에서는 X-Admin-Key 헤더가 ADMIN_KEY와 같을 때만 관리자. ADMIN_KEY가 비어 있으면 아무도 관리자가 아님. 로컬에서는 항상 허용."""
+    if not PRODUCTION:
+        return True
+    return bool(ADMIN_KEY) and x_admin_key is not None and secrets.compare_digest(x_admin_key.encode(), ADMIN_KEY.encode())
+
+
+def require_admin(admin: bool = Depends(is_admin)) -> None:
+    if not admin:
+        raise HTTPException(403, "관리자 키가 필요합니다")
 
 
 @asynccontextmanager
@@ -37,7 +56,9 @@ async def lifespan(app: FastAPI):
     stop_scheduler()    # 서버가 꺼질 때 함께 정리
 
 
-app = FastAPI(title="사이트 알림 서버", lifespan=lifespan)
+# 로그인이 없는 배포 서버에서는 API 목록(/docs, /redoc, /openapi.json)을 공개하지 않음
+DOCS_OFF = {"docs_url": None, "redoc_url": None, "openapi_url": None} if PRODUCTION else {}
+app = FastAPI(title="사이트 알림 서버", lifespan=lifespan, **DOCS_OFF)
 
 # 웹 앱(브라우저)에서 부르기 위한 CORS. `flutter run -d chrome`은 실행할 때마다 포트가 바뀌어 로컬 주소는 포트와 무관하게 허용.
 # 배포한 웹 주소는 CORS_ORIGINS에 쉼표로 구분해 적음 (예: https://app.example.com)
@@ -53,7 +74,17 @@ app.add_middleware(
 )
 
 
-@app.post("/sites", status_code=201)
+@app.get("/healthz")
+def healthz(session: Session = Depends(get_session)):
+    """상태 확인: 서버가 떠 있고 DB에 연결되면 200."""
+    try:
+        session.exec(select(1))
+    except SQLAlchemyError:
+        raise HTTPException(503, "DB에 연결할 수 없습니다")
+    return {"status": "ok"}
+
+
+@app.post("/sites", status_code=201, dependencies=[Depends(require_admin)])
 def register_site(data: SiteCreate, session: Session = Depends(get_session)):
     rss_url = data.rss_url.strip()
     if not rss_url.startswith(("http://", "https://")):
@@ -73,7 +104,7 @@ def list_sites(session: Session = Depends(get_session)):
     return session.exec(select(Site).order_by(Site.id)).all()
 
 
-@app.delete("/sites/{site_id}", status_code=204)
+@app.delete("/sites/{site_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_site(site_id: int, session: Session = Depends(get_session)):
     site = session.get(Site, site_id)
     if not site:
@@ -89,7 +120,7 @@ def delete_site(site_id: int, session: Session = Depends(get_session)):
     session.commit()
 
 
-@app.post("/sites/{site_id}/check")
+@app.post("/sites/{site_id}/check", dependencies=[Depends(require_admin)])
 def check_now(site_id: int, session: Session = Depends(get_session)):
     """테스트용: 지금 바로 확인. 3단계에서 스케줄러가 같은 함수를 주기적으로 호출."""
     site = session.get(Site, site_id)
@@ -102,7 +133,7 @@ def check_now(site_id: int, session: Session = Depends(get_session)):
     return {"new_count": len(new_posts), "new_posts": new_posts}
 
 
-@app.post("/check-all")
+@app.post("/check-all", dependencies=[Depends(require_admin)])
 def check_all_now():
     """테스트용: 스케줄러가 하는 '전체 확인'을 지금 바로 1회 실행."""
     return check_all_sites()
@@ -132,8 +163,7 @@ def list_notices(
 
     sort=latest는 게시일 최신순. deadline은 다가오는 마감이 가까운 순이고, 다가오는 마감이 없는 공지는 그 뒤에 최신순.
     """
-    # shortcut: '오늘'은 서버 시간대 기준, 사용자 시간대가 서버와 다를 수 있으면 요청에서 받기
-    today = date.today()
+    today = today_kst()
     # 게시일은 '2026-10-07 09:00:00.0'(RSS)과 '2026.10.07'(상세 페이지) 두 형식이라 구분자를 맞춰 비교
     published = func.replace(Post.published, ".", "-")
     order = [published.desc(), Post.id.desc()]
@@ -215,16 +245,21 @@ def create_tasks(
     regenerate: bool = False,
     session: Session = Depends(get_session),
     user_id: int = Depends(current_user_id),
+    admin: bool = Depends(is_admin),
 ):
     """'이거 할래' 미리보기: 할 일을 draft로 만들고, 미리보기에 필요한 마감·신청 방식(근거 포함)·unclear와 함께 반환.
 
-    할 일이 이미 있으면(저장한 공지 포함) 그대로 반환하고 Gemini를 다시 부르지 않음. '저장'은 /confirm. 처음 분해하는 공지면 10초 안팎 걸림. regenerate=true면 다시 분해.
+    할 일이 이미 있으면(저장한 공지 포함) 그대로 반환하고 Gemini를 다시 부르지 않음. '저장'은 /confirm. 처음 분해하는 공지면 10초 안팎 걸림. regenerate=true면 다시 분해 (배포 서버에서는 관리자만).
     """
+    if regenerate and not admin:
+        raise HTTPException(403, "관리자 키가 필요합니다")
     post = get_post(session, notice_id)
     try:
         return prepare_tasks(session, user_id, post, regenerate)
     except NotAnalyzedError as e:
         raise HTTPException(409, str(e))
+    except DailyLimitError as e:
+        raise HTTPException(429, str(e))
     except BreakdownError as e:
         raise HTTPException(502, f"할 일 분해 실패: {e}")
 
@@ -368,3 +403,17 @@ def put_weekly_review(
         return save_memo(session, user_id, week, data.memo)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class WebFiles(StaticFiles):
+    """Flutter 웹 화면. 파일 이름에 버전이 없어, 다시 배포한 뒤 옛 화면이 남지 않도록 브라우저가 매번 서버에 확인하게 함."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+# 위의 API 경로에 해당하지 않는 요청만 여기로 옴 (반드시 맨 마지막에 등록). 빌드 결과가 없으면 API만 제공
+if WEB_DIR.is_dir():
+    app.mount("/", WebFiles(directory=WEB_DIR, html=True), name="web")

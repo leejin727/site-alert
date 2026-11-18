@@ -21,10 +21,12 @@ class ApiClient {
       baseUrl = baseUrl ?? defaultBaseUrl();
 
   /// --dart-define=API_BASE_URL이 있으면 그 값(실제 기기: `http://<Mac IP>:8000`).
-  /// 없으면 안드로이드 에뮬레이터는 10.0.2.2(에뮬레이터에서 본 Mac의 localhost), 그 외(iOS 시뮬레이터·웹·데스크톱)는 127.0.0.1.
+  /// 없으면 웹 릴리스 빌드(`flutter build web`)는 화면을 내려준 서버의 주소 그대로,
+  /// 안드로이드 에뮬레이터는 10.0.2.2(에뮬레이터에서 본 Mac의 localhost), 그 외(iOS 시뮬레이터·`flutter run -d chrome`·데스크톱)는 127.0.0.1.
   static String defaultBaseUrl({TargetPlatform? platform}) {
     const fromDefine = String.fromEnvironment('API_BASE_URL');
     if (fromDefine.isNotEmpty) return fromDefine;
+    if (kIsWeb && kReleaseMode) return Uri.base.origin;
     final isAndroid =
         !kIsWeb &&
         (platform ?? defaultTargetPlatform) == TargetPlatform.android;
