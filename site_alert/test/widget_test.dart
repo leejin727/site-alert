@@ -359,6 +359,38 @@ void main() {
     expect(find.text('수정하지 못했어요: 제목은 비워 둘 수 없습니다'), findsOneWidget);
   });
 
+  testWidgets('공지 목록 자동 갱신: 1분마다 로딩 표시 없이 바뀌고, 실패하면 보던 목록 유지', (tester) async {
+    var analyzed = false;
+    var fail = false;
+    final client = MockClient((request) async {
+      if (fail) return jsonResponse({'detail': '서버 오류'}, 500);
+      return jsonResponse([
+        for (final n in notices) {...n, if (analyzed) 'analyzed': true},
+      ]);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('분석 중'), findsOneWidget);
+
+    analyzed = true;
+    await tester.pump(const Duration(minutes: 1));
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.pumpAndSettle();
+    expect(find.text('분석 중'), findsNothing);
+    expect(find.text('이거 할래'), findsNWidgets(2));
+
+    fail = true;
+    await tester.pump(const Duration(minutes: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('서버 오류'), findsNothing);
+    expect(find.text('이거 할래'), findsNWidgets(2));
+  });
+
   testWidgets('불러오기 실패 시 메시지와 다시 시도', (tester) async {
     var attempts = 0;
     final client = MockClient((request) async {
@@ -850,16 +882,19 @@ void homeTests() {
   testWidgets('홈: 비어 있으면 구역마다 안내 문구, 불러오기 실패 시 다시 시도', (tester) async {
     usePhoneScreen(tester);
     var fail = true;
+    var taskLoads = 0;
+    var hasNotice = false;
     final client = MockClient((request) async {
       switch (request.url.path) {
         case '/tasks':
+          taskLoads++;
           return fail
               ? jsonResponse({'detail': '서버 오류'}, 500)
               : jsonResponse([]);
         case '/reviews/weekly':
           return jsonResponse(week(0, 0));
       }
-      return jsonResponse([]);
+      return jsonResponse(hasNotice ? notices : []);
     });
     await tester.pumpWidget(
       MyApp(
@@ -877,6 +912,15 @@ void homeTests() {
     expect(find.text('오늘 할 일이 없어요'), findsNWidgets(2)); // 요약과 목록
     expect(find.text('이번 주에 하기로 한 일이 없어요'), findsOneWidget);
     expect(find.text('새 공지가 없어요'), findsOneWidget);
+
+    // 자동 갱신: 새 공지만 다시 불러오고 할 일은 그대로 둠
+    hasNotice = true;
+    final loadsBefore = taskLoads;
+    await tester.pump(const Duration(minutes: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('새 공지가 없어요'), findsNothing);
+    expect(find.text('학점포기 신청 안내'), findsOneWidget);
+    expect(taskLoads, loadsBefore);
   });
 }
 

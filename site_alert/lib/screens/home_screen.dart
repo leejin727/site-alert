@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -5,7 +7,8 @@ import '../api.dart';
 import '../models.dart';
 import 'my_tasks_screen.dart'
     show MyTaskTile, TaskChecking, daysLeft, ddayText, monthDay;
-import 'notice_list_screen.dart' show ErrorView, NoticeCardView, contentInset;
+import 'notice_list_screen.dart'
+    show ErrorView, NoticeCardView, contentInset, noticeRefreshInterval;
 import 'schedule_detail_screen.dart' show openSource;
 import 'task_preview_screen.dart';
 import 'weekly_review_screen.dart';
@@ -70,10 +73,33 @@ class _HomeScreenState extends State<HomeScreen> with TaskChecking<HomeScreen> {
 
   DateTime get _today => widget.today ?? DateTime.now();
 
+  late final Timer _refreshTimer;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(
+      noticeRefreshInterval,
+      (_) => _refreshNotices(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer.cancel();
+    super.dispose();
+  }
+
+  /// 자동 갱신은 '새 공지'만. 할 일까지 다시 불러오면 방금 체크한 지난 할 일이 목록에서 사라짐.
+  Future<void> _refreshNotices() async {
+    if (_error != null) return;
+    try {
+      final notices = await widget.api.fetchNotices(limit: homeNoticeCount);
+      if (mounted) setState(() => _notices = notices);
+    } on ApiException {
+      // 다음 주기에 다시 시도
+    }
   }
 
   Future<void> _load() async {

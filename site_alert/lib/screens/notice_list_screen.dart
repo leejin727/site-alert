@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -6,6 +8,8 @@ import '../models.dart';
 import 'task_preview_screen.dart';
 
 const contentMaxWidth = 720.0; // 넓은 화면(웹)에서 본문이 넘지 않을 폭
+// 화면을 켜 둔 동안 새 공지와 끝난 분석이 저절로 보이도록 다시 불러오는 간격
+const noticeRefreshInterval = Duration(minutes: 1);
 
 /// 본문 좌우 여백. 휴대폰 폭에서는 16 그대로, 넓은 화면에서는 본문을 [contentMaxWidth]로 가운데에 모음.
 double contentInset(BuildContext context) {
@@ -24,11 +28,35 @@ class NoticeListScreen extends StatefulWidget {
 
 class _NoticeListScreenState extends State<NoticeListScreen> {
   late Future<List<NoticeCard>> _future;
+  late final Timer _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _future = widget.api.fetchNotices();
+    _refreshTimer = Timer.periodic(
+      noticeRefreshInterval,
+      (_) => _refreshQuietly(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer.cancel();
+    super.dispose();
+  }
+
+  /// 자동 갱신: 로딩 표시 없이 목록만 바꾸고, 실패하면 보던 목록을 그대로 둠.
+  Future<void> _refreshQuietly() async {
+    try {
+      final notices = await widget.api.fetchNotices();
+      if (!mounted) return;
+      setState(() {
+        _future = SynchronousFuture(notices);
+      });
+    } on ApiException {
+      // 다음 주기에 다시 시도
+    }
   }
 
   Future<void> _reload() async {
