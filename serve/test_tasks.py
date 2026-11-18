@@ -333,6 +333,42 @@ def test_weekly_review():
             tx.rollback()
 
 
+def test_notice_order():
+    with engine.connect() as conn, conn.begin() as tx:
+        session = Session(bind=conn, join_transaction_mode="create_savepoint")
+        main.app.dependency_overrides[get_session] = lambda: session
+        try:
+            site = Site(name="테스트", rss_url="https://example.com/test-rss")
+            session.add(site)
+            session.commit()
+            # 감지한 순서와 게시일 순서가 다르고, 게시일 형식도 섞여 있음
+            for key, published in [("오늘", "2026-11-18 10:39:37.0"), ("지난달", "2026.10.07"), ("어제", "2026-11-17 16:00:00.0"), ("날짜없음", "")]:
+                session.add(Post(site_id=site.id, post_key=key, title=key, link=f"https://example.com/{key}", published=published))
+                session.commit()
+            client = TestClient(main.app)
+
+            def titles(**params):
+                return [n["title"] for n in client.get("/notices", params={"site_id": site.id, **params}).json()]
+
+            assert titles() == ["오늘", "어제", "지난달", "날짜없음"]
+
+            # 마감 임박순: 다가오는 마감이 가까운 공지부터, 지난 마감뿐이거나 마감이 없는 공지는 그 뒤에 최신순
+            ids = {p.title: p.id for p in session.exec(select(Post).where(Post.site_id == site.id)).all()}
+            soon, later = date.today() + timedelta(days=2), date.today() + timedelta(days=9)
+            for title, order, day, at in [
+                ("지난달", 0, soon, time(18)), ("어제", 0, soon, None), ("어제", 1, later, None),
+                ("날짜없음", 0, later, None), ("오늘", 0, date.today() - timedelta(days=1), None),
+            ]:
+                session.add(NoticeDeadline(notice_id=ids[title], deadline_order=order, label="신청", deadline_date=day, deadline_time=at, confidence="높음"))
+            session.commit()
+            assert titles(sort="deadline") == ["지난달", "어제", "날짜없음", "오늘"]
+            assert titles(sort="deadline", limit=2) == ["지난달", "어제"]
+            assert client.get("/notices", params={"sort": "abc"}).status_code == 422
+        finally:
+            main.app.dependency_overrides.clear()
+            tx.rollback()
+
+
 def test_homepage_url():
     # 학교 일반공지 목록 페이지에 실제로 있던 링크와 같은 값
     assert homepage_url("https://www.mju.ac.kr/bbs/mjukr/141/182143/artclView.do") == (
@@ -375,6 +411,7 @@ if __name__ == "__main__":
     test_api()
     test_my_tasks()
     test_weekly_review()
+    test_notice_order()
     test_homepage_url()
     test_cors()
     print("OK")

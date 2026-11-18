@@ -38,9 +38,16 @@ class ApiClient {
   // 처음 분해하는 공지는 Gemini를 기다림 (서버의 재시도 포함)
   static const _previewTimeout = Duration(seconds: 90);
 
-  /// [limit]을 주면 최근 공지부터 그 개수만.
-  Future<List<NoticeCard>> fetchNotices({int? limit}) async {
-    final query = limit == null ? '' : '?limit=$limit';
+  /// [limit]을 주면 앞에서부터 그 개수만. 기본은 최신순, [byDeadline]이면 마감이 가까운 순.
+  Future<List<NoticeCard>> fetchNotices({
+    int? limit,
+    bool byDeadline = false,
+  }) async {
+    final params = [
+      if (limit != null) 'limit=$limit',
+      if (byDeadline) 'sort=deadline',
+    ];
+    final query = params.isEmpty ? '' : '?${params.join('&')}';
     final data = await _send(
       _client.get(Uri.parse('$baseUrl/notices$query')),
       _timeout,

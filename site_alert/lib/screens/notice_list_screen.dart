@@ -29,11 +29,15 @@ class NoticeListScreen extends StatefulWidget {
 class _NoticeListScreenState extends State<NoticeListScreen> {
   late Future<List<NoticeCard>> _future;
   late final Timer _refreshTimer;
+  bool _byDeadline = false; // 마감 임박순. 아니면 최신순
+
+  Future<List<NoticeCard>> _fetch() =>
+      widget.api.fetchNotices(byDeadline: _byDeadline);
 
   @override
   void initState() {
     super.initState();
-    _future = widget.api.fetchNotices();
+    _future = _fetch();
     _refreshTimer = Timer.periodic(
       noticeRefreshInterval,
       (_) => _refreshQuietly(),
@@ -49,8 +53,9 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
   /// 자동 갱신: 로딩 표시 없이 목록만 바꾸고, 실패하면 보던 목록을 그대로 둠.
   Future<void> _refreshQuietly() async {
     try {
-      final notices = await widget.api.fetchNotices();
-      if (!mounted) return;
+      final byDeadline = _byDeadline;
+      final notices = await _fetch();
+      if (!mounted || byDeadline != _byDeadline) return; // 그사이 순서를 바꿨으면 버림
       setState(() {
         _future = SynchronousFuture(notices);
       });
@@ -60,7 +65,7 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
   }
 
   Future<void> _reload() async {
-    final future = widget.api.fetchNotices();
+    final future = _fetch();
     setState(() {
       _future = future;
     });
@@ -98,42 +103,73 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
             ),
         ],
       ),
-      body: FutureBuilder<List<NoticeCard>>(
-        future: _future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return ErrorView(
-              message: snapshot.error.toString(),
-              onRetry: _reload,
-            );
-          }
-          final notices = snapshot.data!;
-          return RefreshIndicator(
-            onRefresh: _reload,
-            child: notices.isEmpty
-                ? ListView(
-                    children: const [
-                      SizedBox(height: 120),
-                      Center(child: Text('공지가 없습니다')),
-                    ],
-                  )
-                : ListView.separated(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: contentInset(context),
-                      vertical: 16,
-                    ),
-                    itemCount: notices.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) => NoticeCardView(
-                      notice: notices[i],
-                      onDoIt: () => _openPreview(notices[i]),
-                    ),
-                  ),
-          );
-        },
+      body: Column(
+        children: [
+          Padding(
+            // 아래 카드와 좌우 끝을 맞춤 (Card 기본 여백 4)
+            padding: EdgeInsets.fromLTRB(
+              contentInset(context) + 4,
+              16,
+              contentInset(context) + 4,
+              0,
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<bool>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: false, label: Text('최신순')),
+                  ButtonSegment(value: true, label: Text('마감 임박순')),
+                ],
+                selected: {_byDeadline},
+                onSelectionChanged: (s) {
+                  _byDeadline = s.first;
+                  _reload();
+                },
+              ),
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<List<NoticeCard>>(
+              future: _future,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return ErrorView(
+                    message: snapshot.error.toString(),
+                    onRetry: _reload,
+                  );
+                }
+                final notices = snapshot.data!;
+                return RefreshIndicator(
+                  onRefresh: _reload,
+                  child: notices.isEmpty
+                      ? ListView(
+                          children: const [
+                            SizedBox(height: 120),
+                            Center(child: Text('공지가 없습니다')),
+                          ],
+                        )
+                      : ListView.separated(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: contentInset(context),
+                            vertical: 16,
+                          ),
+                          itemCount: notices.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 12),
+                          itemBuilder: (_, i) => NoticeCardView(
+                            notice: notices[i],
+                            onDoIt: () => _openPreview(notices[i]),
+                          ),
+                        ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

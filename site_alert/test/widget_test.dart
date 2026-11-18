@@ -391,6 +391,40 @@ void main() {
     expect(find.text('이거 할래'), findsNWidgets(2));
   });
 
+  testWidgets('공지 순서: 마감 임박순으로 바꾸면 그 순서로 다시 불러오고 자동 갱신도 그 순서', (tester) async {
+    final queries = <String>[];
+    final client = MockClient((request) async {
+      queries.add(request.url.query);
+      final byDeadline = request.url.queryParameters['sort'] == 'deadline';
+      return jsonResponse(byDeadline ? notices.reversed.toList() : notices);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
+      ),
+    );
+    await tester.pumpAndSettle();
+    double top(String title) => tester.getTopLeft(find.text(title)).dy;
+    expect(queries, ['']);
+    expect(top('학점포기 신청 안내'), lessThan(top('분석 전 공지')));
+
+    await tester.tap(find.text('마감 임박순'));
+    await tester.pumpAndSettle();
+    expect(queries.last, 'sort=deadline');
+    expect(top('분석 전 공지'), lessThan(top('학점포기 신청 안내')));
+
+    await tester.pump(const Duration(minutes: 1));
+    await tester.pumpAndSettle();
+    expect(queries, ['', 'sort=deadline', 'sort=deadline']);
+    expect(top('분석 전 공지'), lessThan(top('학점포기 신청 안내')));
+
+    await tester.tap(find.text('최신순'));
+    await tester.pumpAndSettle();
+    expect(queries.last, '');
+    expect(top('학점포기 신청 안내'), lessThan(top('분석 전 공지')));
+  });
+
   testWidgets('불러오기 실패 시 메시지와 다시 시도', (tester) async {
     var attempts = 0;
     final client = MockClient((request) async {

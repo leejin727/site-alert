@@ -1,11 +1,11 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import date
-from typing import Optional
+from datetime import date, time
+from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, delete, func, select
 
 from serve.db import get_session
 from serve.models import (
@@ -124,26 +124,46 @@ def list_posts(
 def list_notices(
     site_id: Optional[int] = None,
     limit: int = 50,
+    sort: Literal["latest", "deadline"] = "latest",
     session: Session = Depends(get_session),
     user_id: int = Depends(current_user_id),
 ):
-    """공지 카드 목록. 분석 전인 공지도 포함 (analyzed=false)."""
+    """공지 카드 목록. 분석 전인 공지도 포함 (analyzed=false).
+
+    sort=latest는 게시일 최신순. deadline은 다가오는 마감이 가까운 순이고, 다가오는 마감이 없는 공지는 그 뒤에 최신순.
+    """
+    # shortcut: '오늘'은 서버 시간대 기준, 사용자 시간대가 서버와 다를 수 있으면 요청에서 받기
+    today = date.today()
+    # 게시일은 '2026-10-07 09:00:00.0'(RSS)과 '2026.10.07'(상세 페이지) 두 형식이라 구분자를 맞춰 비교
+    published = func.replace(Post.published, ".", "-")
+    order = [published.desc(), Post.id.desc()]
     query = (
         select(Post, Site.name, PostAnalysis)
         .join(Site, Post.site_id == Site.id)
         .outerjoin(PostAnalysis, PostAnalysis.post_id == Post.id)
-        .order_by(Post.detected_at.desc(), Post.id.desc())
-        .limit(min(limit, 200))
     )
+    if sort == "deadline":
+        # 카드에 보이는 '다음 마감'과 같은 기준. 시간이 없는 마감은 그날 끝으로 봄
+        upcoming = (
+            select(
+                NoticeDeadline.notice_id,
+                func.min(NoticeDeadline.deadline_date + func.coalesce(NoticeDeadline.deadline_time, time(23, 59, 59))).label("at"),
+            )
+            .where(NoticeDeadline.deadline_date >= today)
+            .group_by(NoticeDeadline.notice_id)
+            .subquery()
+        )
+        query = query.outerjoin(upcoming, upcoming.c.notice_id == Post.id)
+        order.insert(0, upcoming.c.at.asc().nulls_last())
+    query = query.order_by(*order).limit(min(limit, 200))
     if site_id is not None:
         query = query.where(Post.site_id == site_id)
     rows = session.exec(query).all()
     ids = [post.id for post, _, _ in rows]
-    # shortcut: '오늘'은 서버 시간대 기준, 사용자 시간대가 서버와 다를 수 있으면 요청에서 받기
     next_deadline = {}
     for d in session.exec(
         select(NoticeDeadline)
-        .where(NoticeDeadline.notice_id.in_(ids), NoticeDeadline.deadline_date >= date.today())
+        .where(NoticeDeadline.notice_id.in_(ids), NoticeDeadline.deadline_date >= today)
         .order_by(NoticeDeadline.deadline_date, NoticeDeadline.deadline_time)
     ).all():
         next_deadline.setdefault(d.notice_id, d)
