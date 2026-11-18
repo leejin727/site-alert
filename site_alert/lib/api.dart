@@ -38,9 +38,11 @@ class ApiClient {
   // 처음 분해하는 공지는 Gemini를 기다림 (서버의 재시도 포함)
   static const _previewTimeout = Duration(seconds: 90);
 
-  Future<List<NoticeCard>> fetchNotices() async {
+  /// [limit]을 주면 최근 공지부터 그 개수만.
+  Future<List<NoticeCard>> fetchNotices({int? limit}) async {
+    final query = limit == null ? '' : '?limit=$limit';
     final data = await _send(
-      _client.get(Uri.parse('$baseUrl/notices')),
+      _client.get(Uri.parse('$baseUrl/notices$query')),
       _timeout,
     ) as List;
     return [
@@ -104,6 +106,17 @@ class ApiClient {
     return [for (final t in data) MyTask.fromJson(t as Map<String, dynamic>)];
   }
 
+  /// 캘린더: 내가 담은 공지의 날짜 있는 마감 (빠른 순).
+  Future<List<MyDeadline>> fetchMyDeadlines() async {
+    final data = await _send(
+      _client.get(Uri.parse('$baseUrl/deadlines')),
+      _timeout,
+    ) as List;
+    return [
+      for (final d in data) MyDeadline.fromJson(d as Map<String, dynamic>),
+    ];
+  }
+
   Future<void> setDone(int taskId, bool isDone) async {
     await _send(
       _client.patch(
@@ -139,6 +152,110 @@ class ApiClient {
       _timeout,
     );
     return WeeklyReview.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// 일정 목록: 직접 만든 일정과 공지에서 담은 것 (서버가 정렬).
+  Future<List<ScheduleEntry>> fetchSchedules() async {
+    final data = await _send(
+      _client.get(Uri.parse('$baseUrl/schedules')),
+      _timeout,
+    ) as List;
+    return [
+      for (final e in data) ScheduleEntry.fromJson(e as Map<String, dynamic>),
+    ];
+  }
+
+  Future<ScheduleDetail> fetchSchedule(int scheduleId) async {
+    final data = await _send(
+      _client.get(Uri.parse('$baseUrl/schedules/$scheduleId')),
+      _timeout,
+    );
+    return ScheduleDetail.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// 일정 등록. [useChecklist]면 서버가 기본 체크리스트를 날짜에 맞춰 넣음.
+  Future<ScheduleDetail> createSchedule({
+    required String kind,
+    required String title,
+    required String date,
+    required bool useChecklist,
+  }) async {
+    final data = await _send(
+      _client.post(
+        Uri.parse('$baseUrl/schedules'),
+        headers: _json,
+        body: jsonEncode({
+          'kind': kind,
+          'title': title,
+          'target_date': date,
+          'use_checklist': useChecklist,
+        }),
+      ),
+      _timeout,
+    );
+    return ScheduleDetail.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// 일정의 제목·날짜 수정. 날짜가 바뀌면 서버가 완료하지 않은 기본 항목의 예정일을 다시 계산.
+  Future<ScheduleDetail> updateSchedule(
+    int scheduleId, {
+    required String title,
+    required String date,
+  }) async {
+    final data = await _send(
+      _client.patch(
+        Uri.parse('$baseUrl/schedules/$scheduleId'),
+        headers: _json,
+        body: jsonEncode({'title': title, 'target_date': date}),
+      ),
+      _timeout,
+    );
+    return ScheduleDetail.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<void> deleteSchedule(int scheduleId) async {
+    await _send(
+      _client.delete(Uri.parse('$baseUrl/schedules/$scheduleId')),
+      _timeout,
+    );
+  }
+
+  Future<ScheduleTask> addScheduleTask(
+    int scheduleId, {
+    required String title,
+    String? phase,
+    String? scheduledDate,
+  }) async {
+    final data = await _send(
+      _client.post(
+        Uri.parse('$baseUrl/schedules/$scheduleId/tasks'),
+        headers: _json,
+        body: jsonEncode({
+          'title': title,
+          'phase': phase,
+          'scheduled_date': scheduledDate,
+        }),
+      ),
+      _timeout,
+    );
+    return ScheduleTask.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// 체크리스트 항목의 제목·예정일 수정 ([scheduledDate]가 null이면 예정일을 비움).
+  Future<ScheduleTask> updateScheduleTask(
+    int taskId, {
+    required String title,
+    required String? scheduledDate,
+  }) async {
+    final data = await _send(
+      _client.patch(
+        Uri.parse('$baseUrl/tasks/$taskId'),
+        headers: _json,
+        body: jsonEncode({'title': title, 'scheduled_date': scheduledDate}),
+      ),
+      _timeout,
+    );
+    return ScheduleTask.fromJson(data as Map<String, dynamic>);
   }
 
   Future<void> deleteTask(int taskId) async {

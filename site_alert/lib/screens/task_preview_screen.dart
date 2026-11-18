@@ -242,7 +242,7 @@ class _TaskPreviewScreenState extends State<TaskPreviewScreen> {
               style: theme.textTheme.titleSmall,
             ),
             if (preview.applyMethod == null || preview.applyMethod == '불명확')
-              const _Tag('확인 필요'),
+              const Tag('확인 필요'),
           ],
         ),
         const SizedBox(height: 4),
@@ -365,8 +365,8 @@ class _DeadlineTile extends StatelessWidget {
                 '${deadline.label} · ${deadline.when}',
                 style: theme.textTheme.titleSmall,
               ),
-              if (deadline.yearCorrected) const _Tag('연도 자동 보정'),
-              if (deadline.confidence == '낮음') const _Tag('확인 필요'),
+              if (deadline.yearCorrected) const Tag('연도 자동 보정'),
+              if (deadline.confidence == '낮음') const Tag('확인 필요'),
             ],
           ),
           const SizedBox(height: 4),
@@ -377,8 +377,9 @@ class _DeadlineTile extends StatelessWidget {
   }
 }
 
-class _Tag extends StatelessWidget {
-  const _Tag(this.text);
+/// 작은 이름표 (확인 필요, 출처 등).
+class Tag extends StatelessWidget {
+  const Tag(this.text, {super.key});
 
   final String text;
 

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../models.dart';
 import 'notice_list_screen.dart' show ErrorView, InfoChip, contentInset;
-import 'task_preview_screen.dart';
+import 'schedule_detail_screen.dart' show openSource;
 import 'weekly_review_screen.dart';
 
 const urgentDays = 3; // 마감까지 이 일수 이내(D-3 ~ D-day)면 임박으로 강조
@@ -19,8 +19,49 @@ int daysLeft(String isoDate, DateTime today) {
   ).difference(DateTime.utc(today.year, today.month, today.day)).inDays;
 }
 
+/// 마감까지 남은 일수의 표시: 'D-3', 'D-day', 지났으면 '마감 지남'.
+String ddayText(int days) => switch (days) {
+  0 => 'D-day',
+  < 0 => '마감 지남',
+  _ => 'D-$days',
+};
+
 String monthDay(String isoDate) =>
     '${int.parse(isoDate.substring(5, 7))}/${int.parse(isoDate.substring(8, 10))}';
+
+/// 할 일 체크 공용 동작 (내 할 일·홈·캘린더): 화면을 먼저 바꾸고 서버에 반영, 실패하면 되돌리고 안내.
+mixin TaskChecking<W extends StatefulWidget> on State<W> {
+  ApiClient get taskApi;
+
+  List<MyTask>? tasks;
+  final Set<int> pending = {}; // 완료 체크를 서버에 반영 중인 할 일 id
+
+  void _replace(MyTask task) {
+    final i = tasks!.indexWhere((t) => t.id == task.id);
+    if (i >= 0) tasks![i] = task;
+  }
+
+  /// 서버에 반영되면 true.
+  Future<bool> toggleTask(MyTask task, bool isDone) async {
+    setState(() {
+      pending.add(task.id);
+      _replace(task.copyWith(isDone: isDone));
+    });
+    try {
+      await taskApi.setDone(task.id, isDone);
+      return true;
+    } on ApiException catch (e) {
+      if (!mounted) return false;
+      setState(() => _replace(task));
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('반영하지 못했어요: ${e.message}')));
+      return false;
+    } finally {
+      if (mounted) setState(() => pending.remove(task.id));
+    }
+  }
+}
 
 /// '내 할 일': 저장한 할 일을 마감이 가까운 순으로. 완료한 것은 아래 '완료' 묶음에.
 class MyTasksScreen extends StatefulWidget {
@@ -33,10 +74,12 @@ class MyTasksScreen extends StatefulWidget {
   State<MyTasksScreen> createState() => _MyTasksScreenState();
 }
 
-class _MyTasksScreenState extends State<MyTasksScreen> {
-  List<MyTask>? _tasks;
+class _MyTasksScreenState extends State<MyTasksScreen>
+    with TaskChecking<MyTasksScreen> {
   String? _error;
-  final Set<int> _pending = {}; // 완료 체크를 서버에 반영 중인 할 일 id
+
+  @override
+  ApiClient get taskApi => widget.api;
 
   @override
   void initState() {
@@ -47,53 +90,21 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
-      final tasks = await widget.api.fetchMyTasks();
-      if (mounted) setState(() => _tasks = tasks);
+      final loaded = await widget.api.fetchMyTasks();
+      if (mounted) setState(() => tasks = loaded);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     }
   }
 
-  void _replace(MyTask task) {
-    final i = _tasks!.indexWhere((t) => t.id == task.id);
-    if (i >= 0) _tasks![i] = task;
-  }
-
-  /// 체크하면 화면을 먼저 바꾸고 서버에 반영. 실패하면 되돌림.
-  Future<void> _toggle(MyTask task, bool isDone) async {
-    setState(() {
-      _pending.add(task.id);
-      _replace(task.copyWith(isDone: isDone));
-    });
-    try {
-      await widget.api.setDone(task.id, isDone);
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      setState(() => _replace(task));
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('반영하지 못했어요: ${e.message}')));
-    } finally {
-      if (mounted) setState(() => _pending.remove(task.id));
-    }
-  }
-
   Future<void> _openNotice(MyTask task) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TaskPreviewScreen(
-          api: widget.api,
-          noticeId: task.noticeId,
-          link: task.noticeLink,
-        ),
-      ),
-    );
+    await openSource(context, widget.api, task.source, today: widget.today);
     if (mounted) _load(); // 미리보기에서 할 일을 고쳤을 수 있음
   }
 
   @override
   Widget build(BuildContext context) {
-    final tasks = _tasks;
+    final tasks = this.tasks;
     return Scaffold(
       appBar: AppBar(
         title: const Text('내 할 일'),
@@ -144,8 +155,8 @@ class _MyTasksScreenState extends State<MyTasksScreen> {
       key: ValueKey(t.id),
       task: t,
       today: today,
-      pending: _pending.contains(t.id),
-      onChanged: (v) => _toggle(t, v),
+      pending: pending.contains(t.id),
+      onChanged: (v) => toggleTask(t, v),
       onTap: () => _openNotice(t),
     );
     return ListView(
@@ -184,6 +195,8 @@ class MyTaskTile extends StatelessWidget {
     required this.pending,
     required this.onChanged,
     required this.onTap,
+    this.scheduleLabel,
+    this.scheduleUrgent = false,
   });
 
   final MyTask task;
@@ -191,6 +204,8 @@ class MyTaskTile extends StatelessWidget {
   final bool pending;
   final ValueChanged<bool> onChanged;
   final VoidCallback onTap;
+  final String? scheduleLabel; // 예정일 칩의 문구를 바꿀 때 (홈의 '오늘'·'지남')
+  final bool scheduleUrgent;
 
   @override
   Widget build(BuildContext context) {
@@ -239,7 +254,7 @@ class MyTaskTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      task.noticeTitle,
+                      task.source.text,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.labelMedium?.copyWith(
@@ -256,7 +271,10 @@ class MyTaskTile extends StatelessWidget {
                           if (task.scheduledDate != null)
                             InfoChip(
                               icon: Icons.today,
-                              text: _scheduleText(task.scheduledDate!),
+                              urgent: scheduleUrgent,
+                              text:
+                                  scheduleLabel ??
+                                  _scheduleText(task.scheduledDate!),
                             ),
                           if (deadline != null)
                             InfoChip(
@@ -287,12 +305,7 @@ class MyTaskTile extends StatelessWidget {
 
   /// 예: 'D-2 · 서류 제출 10/30 18:00', '마감 지남 · 공지 마감(신청) 10/16'
   String _deadlineText(DeadlineInfo deadline, int? days) {
-    final dday = switch (days) {
-      null => null,
-      0 => 'D-day',
-      < 0 => '마감 지남',
-      _ => 'D-$days',
-    };
+    final dday = days == null ? null : ddayText(days);
     final label = task.deadlineFromNotice
         ? '공지 마감(${deadline.label})'
         : deadline.label;

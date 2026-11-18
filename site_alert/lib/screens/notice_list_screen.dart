@@ -112,16 +112,23 @@ class _NoticeListScreenState extends State<NoticeListScreen> {
 }
 
 class NoticeCardView extends StatelessWidget {
-  const NoticeCardView({super.key, required this.notice, required this.onDoIt});
+  const NoticeCardView({
+    super.key,
+    required this.notice,
+    required this.onDoIt,
+    this.margin,
+  });
 
   final NoticeCard notice;
   final VoidCallback onDoIt;
+  final EdgeInsetsGeometry? margin; // 없으면 Card 기본 여백. 홈에서 다른 카드와 좌우를 맞출 때 지정
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final deadline = notice.nextDeadline;
     return Card(
+      margin: margin,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

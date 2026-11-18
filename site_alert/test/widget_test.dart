@@ -8,8 +8,12 @@ import 'package:http/testing.dart';
 
 import 'package:site_alert/api.dart';
 import 'package:site_alert/main.dart';
+import 'package:site_alert/models.dart';
+import 'package:site_alert/screens/calendar_screen.dart';
+import 'package:site_alert/screens/home_screen.dart';
 import 'package:site_alert/screens/my_tasks_screen.dart';
 import 'package:site_alert/screens/notice_list_screen.dart' show InfoChip;
+import 'package:site_alert/screens/task_preview_screen.dart' show Tag;
 
 final notices = [
   {
@@ -99,6 +103,9 @@ void usePhoneScreen(WidgetTester tester) {
 }
 
 void main() {
+  homeTests();
+  calendarTests();
+  scheduleTests();
   myTasksTests();
   weeklyReviewTests();
 
@@ -110,6 +117,7 @@ void main() {
       await tester.pumpWidget(
         MyApp(
           api: ApiClient(client: client, baseUrl: 'http://test'),
+          initialTab: 1,
         ),
       );
       await tester.pumpAndSettle();
@@ -177,6 +185,7 @@ void main() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -288,6 +297,7 @@ void main() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -310,6 +320,7 @@ void main() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -331,6 +342,7 @@ void main() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -359,6 +371,7 @@ void main() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -456,6 +469,7 @@ void myTasksTests() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
         today: DateTime(2026, 10, 28),
       ),
     );
@@ -593,6 +607,7 @@ void weeklyReviewTests() {
     await tester.pumpWidget(
       MyApp(
         api: ApiClient(client: client, baseUrl: 'http://test'),
+        initialTab: 1,
       ),
     );
     await tester.pumpAndSettle();
@@ -658,5 +673,746 @@ void weeklyReviewTests() {
       'GET 2026-10-25',
       'GET 2026-11-01',
     ]);
+  });
+}
+
+void homeTests() {
+  final today = DateTime(2026, 10, 28);
+  List<MyTask> parse(List<Map<String, dynamic>> items) => [
+    for (final t in items) MyTask.fromJson(t),
+  ];
+
+  test('오늘 할 일: 오늘 것은 완료 포함, 지난 것은 미완료만, 미완료가 위·예정일 빠른 순', () {
+    final tasks = parse([
+      myTask(1, '오늘 완료', scheduled: '2026-10-28', done: true),
+      myTask(2, '오늘 남음', scheduled: '2026-10-28'),
+      myTask(3, '지난 미완료', scheduled: '2026-10-26'),
+      myTask(4, '지난 완료', scheduled: '2026-10-26', done: true),
+      myTask(5, '내일', scheduled: '2026-10-29'),
+      myTask(6, '예정일 없음'),
+      myTask(7, '더 지난 미완료', scheduled: '2026-10-20'),
+      myTask(8, '오늘 남음 2', scheduled: '2026-10-28'),
+    ]);
+    expect([for (final t in todayTasks(tasks, today)) t.id], [7, 3, 2, 8, 1]);
+  });
+
+  test('가장 가까운 마감: 미완료 할 일의 마감 중 오늘 이후 가장 가까운 것', () {
+    final tasks = parse([
+      myTask(1, '지난 마감', date: '2026-10-27'),
+      myTask(2, '완료한 일', date: '2026-10-29', done: true),
+      myTask(3, '다음 주', date: '2026-11-02'),
+      myTask(4, '시각 없음', date: '2026-10-31'),
+      myTask(5, '같은 날 18시', date: '2026-10-31', time: '18:00:00'),
+      myTask(6, '마감 없음'),
+    ]);
+    expect(nearestDeadline(tasks, today)?.id, 5);
+    expect(nearestDeadline(tasks.sublist(0, 2), today), isNull);
+    expect(
+      nearestDeadline(
+        parse([myTask(9, '오늘 마감', date: '2026-10-28')]),
+        today,
+      )?.id,
+      9,
+    );
+  });
+
+  Map<String, dynamic> week(int planned, int done) => {
+    'week_start': '2026-10-25',
+    'week_end': '2026-10-31',
+    'planned': planned,
+    'done': done,
+    'rate': planned == 0 ? null : done / planned,
+    'unfinished': [],
+    'memo': null,
+    'updated_at': null,
+  };
+
+  testWidgets('홈: 요약, 오늘·지남 표시와 순서, 체크 반영(실패 시 되돌림), 회고 이동, 새 공지', (
+    tester,
+  ) async {
+    usePhoneScreen(tester);
+    final requests = <String>[];
+    var done = 1;
+    final client = MockClient((request) async {
+      final key = '${request.method} ${request.url.path}';
+      switch (key) {
+        case 'GET /notices':
+          requests.add('GET /notices?${request.url.query}');
+          return jsonResponse([
+            for (var i = 1; i <= 3; i++)
+              {...notices[0], 'id': i, 'title': '새 공지 $i'},
+          ]);
+        case 'GET /tasks':
+          return jsonResponse([
+            myTask(
+              1,
+              '성적표 준비',
+              date: '2026-11-05',
+              scheduled: '2026-10-28',
+              done: true,
+            ),
+            myTask(
+              2,
+              '신청서 제출',
+              date: '2026-10-30',
+              time: '18:00:00',
+              scheduled: '2026-10-28',
+            ),
+            myTask(3, '재학증명서 발급', date: '2026-11-02', scheduled: '2026-10-26'),
+            myTask(4, '면담 예약', date: '2026-11-02', scheduled: '2026-10-29'),
+          ]);
+        case 'GET /reviews/weekly':
+          return jsonResponse(week(4, done));
+        case 'PATCH /tasks/2':
+          requests.add('$key ${request.body}');
+          done = 2;
+          return jsonResponse(task(2, '신청서 제출'));
+        case 'PATCH /tasks/3':
+          requests.add('$key ${request.body}');
+          return jsonResponse({'detail': '서버 오류'}, 500);
+        case 'POST /notices/1/tasks':
+          return jsonResponse(started);
+      }
+      return jsonResponse({'detail': 'unexpected $key'}, 404);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 요약 3개
+    expect(find.text('D-2 · 학점포기 신청 안내'), findsOneWidget);
+    expect(find.text('신청 10/30 18:00'), findsOneWidget);
+    expect(find.text('1개 남음'), findsOneWidget);
+    expect(find.text('지난 할 일 1개'), findsOneWidget);
+    expect(find.text('4개 중 1개 완료 · 25%'), findsOneWidget);
+    expect(requests, ['GET /notices?limit=3']);
+
+    // 오늘 할 일: 지난 미완료 → 오늘 미완료 → 오늘 완료. 내일 것은 없음
+    double y(String title) => tester.getTopLeft(find.text(title)).dy;
+    expect(y('재학증명서 발급') < y('신청서 제출'), isTrue);
+    expect(y('신청서 제출') < y('성적표 준비'), isTrue);
+    expect(find.text('면담 예약'), findsNothing);
+    expect(find.text('지남 · 10/26'), findsOneWidget);
+    expect(find.text('오늘'), findsOneWidget);
+    expect(find.text('학점포기 신청 안내'), findsNWidgets(3)); // 어느 공지의 할 일인지
+
+    Finder checkbox(String title) => find.descendant(
+      of: find.widgetWithText(MyTaskTile, title),
+      matching: find.byType(Checkbox),
+    );
+
+    // 체크하면 바로 반영되고 요약도 바뀜. 목록에는 그대로 남아 아래로 내려감
+    await tester.tap(checkbox('신청서 제출'));
+    await tester.pumpAndSettle();
+    expect(requests.last, 'PATCH /tasks/2 {"is_done":true}');
+    expect(find.text('오늘 할 일을 모두 끝냈어요'), findsOneWidget);
+    expect(find.text('4개 중 2개 완료 · 50%'), findsOneWidget);
+    expect(tester.widget<Checkbox>(checkbox('신청서 제출')).value, isTrue);
+
+    // 실패하면 되돌리고 안내
+    await tester.tap(checkbox('재학증명서 발급'));
+    await tester.pumpAndSettle();
+    expect(requests.last, 'PATCH /tasks/3 {"is_done":true}');
+    expect(find.text('반영하지 못했어요: 서버 오류'), findsOneWidget);
+    expect(tester.widget<Checkbox>(checkbox('재학증명서 발급')).value, isFalse);
+    expect(find.text('지난 할 일 1개'), findsOneWidget);
+
+    // 완료율을 누르면 회고 화면
+    await tester.tap(find.text('이번 주 완료율'));
+    await tester.pumpAndSettle();
+    expect(find.text('이번 주 회고'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // 새 공지 3개와 '이거 할래'
+    final list = find.byType(Scrollable).first;
+    for (var i = 1; i <= 3; i++) {
+      await tester.scrollUntilVisible(
+        find.text('새 공지 $i'),
+        200,
+        scrollable: list,
+      );
+    }
+    await tester.scrollUntilVisible(
+      find.text('이거 할래').first,
+      -200,
+      scrollable: list,
+    );
+    await tester.tap(find.text('이거 할래').first);
+    await tester.pumpAndSettle();
+    expect(find.text('근거: 재학증명서 1부'), findsOneWidget);
+  });
+
+  testWidgets('홈: 비어 있으면 구역마다 안내 문구, 불러오기 실패 시 다시 시도', (tester) async {
+    usePhoneScreen(tester);
+    var fail = true;
+    final client = MockClient((request) async {
+      switch (request.url.path) {
+        case '/tasks':
+          return fail
+              ? jsonResponse({'detail': '서버 오류'}, 500)
+              : jsonResponse([]);
+        case '/reviews/weekly':
+          return jsonResponse(week(0, 0));
+      }
+      return jsonResponse([]);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('서버 오류'), findsOneWidget);
+
+    fail = false;
+    await tester.tap(find.text('다시 시도'));
+    await tester.pumpAndSettle();
+    expect(find.text('다가오는 마감이 없어요'), findsOneWidget);
+    expect(find.text('오늘 할 일이 없어요'), findsNWidgets(2)); // 요약과 목록
+    expect(find.text('이번 주에 하기로 한 일이 없어요'), findsOneWidget);
+    expect(find.text('새 공지가 없어요'), findsOneWidget);
+  });
+}
+
+Map<String, dynamic> myDeadline(
+  int id,
+  String label,
+  String date, {
+  String? time,
+  String title = '학점포기 신청 안내',
+}) => {
+  'id': id,
+  'label': label,
+  'deadline_date': date,
+  'deadline_time': time,
+  'notice': {'id': 1, 'title': title, 'link': 'https://example.com/1'},
+};
+
+void calendarTests() {
+  final today = DateTime(2026, 10, 28); // 수요일
+
+  test('달력 칸: 일요일 시작, 1일 앞과 말일 뒤는 빈칸, 7의 배수', () {
+    int lead(List<DateTime?> cells) => cells.indexWhere((d) => d != null);
+    int days(List<DateTime?> cells) => cells.whereType<DateTime>().length;
+    final oct = monthCells(2026, 10); // 1일이 목요일
+    expect((lead(oct), days(oct), oct.length), (4, 31, 35));
+    expect(oct[4], DateTime(2026, 10, 1));
+    expect(oct.last, DateTime(2026, 10, 31));
+    final feb = monthCells(2026, 2); // 1일이 일요일인 28일짜리 달
+    expect((lead(feb), days(feb), feb.length), (0, 28, 28));
+    final jan = monthCells(2027, 1); // 1일이 금요일 → 6주
+    expect((lead(jan), days(jan), jan.length), (5, 31, 42));
+    expect(days(monthCells(2028, 2)), 29); // 윤년
+    expect(
+      monthCells(2026, 12).whereType<DateTime>().last,
+      DateTime(2026, 12, 31),
+    );
+  });
+
+  test('날짜별 표시와 묶기: 할 일 예정일(미완료·완료)과 마감일', () {
+    final tasks = [
+      for (final t in [
+        myTask(1, '완료한 일', scheduled: '2026-10-28', done: true),
+        myTask(2, '남은 일', scheduled: '2026-10-28'),
+        myTask(3, '다른 날 완료', scheduled: '2026-10-26', done: true),
+        myTask(4, '예정일 없음'),
+      ])
+        MyTask.fromJson(t),
+    ];
+    final deadlines = [
+      for (final d in [
+        myDeadline(10, '신청', '2026-10-30', time: '18:00:00'),
+        myDeadline(11, '서류', '2026-10-28'),
+        myDeadline(12, '면접', '2026-11-05'),
+      ])
+        MyDeadline.fromJson(d),
+    ];
+    final marks = calendarMarks(tasks, deadlines);
+    expect(marks['2026-10-28'], (todo: true, done: true, deadline: true));
+    expect(marks['2026-10-26'], (todo: false, done: true, deadline: false));
+    expect(marks['2026-10-30'], (todo: false, done: false, deadline: true));
+    expect(marks.containsKey('2026-10-29'), isFalse);
+    expect([for (final t in tasksOn(tasks, '2026-10-28')) t.id], [2, 1]);
+    expect([for (final d in deadlinesIn(deadlines, 2026, 10)) d.id], [10, 11]);
+    expect([for (final d in deadlinesIn(deadlines, 2026, 11)) d.id], [12]);
+    expect(deadlinesIn(deadlines, 2026, 1), isEmpty);
+  });
+
+  testWidgets('캘린더: 오늘·표시, 날짜를 누르면 그날 목록, 체크 반영, 달 이동과 그 달의 마감', (
+    tester,
+  ) async {
+    usePhoneScreen(tester);
+    final requests = <String>[];
+    final client = MockClient((request) async {
+      final key = '${request.method} ${request.url.path}';
+      switch (key) {
+        case 'GET /tasks':
+          return jsonResponse([
+            myTask(1, '성적표 준비', scheduled: '2026-10-28', done: true),
+            myTask(2, '신청서 제출', scheduled: '2026-10-28'),
+            myTask(3, '재학증명서 발급', scheduled: '2026-10-26', done: true),
+          ]);
+        case 'GET /deadlines':
+          return jsonResponse([
+            myDeadline(10, '신청', '2026-10-30', time: '18:00:00'),
+            myDeadline(11, '면접', '2026-11-05', title: '장학생 선발 안내'),
+          ]);
+        case 'PATCH /tasks/2':
+          requests.add('$key ${request.body}');
+          return jsonResponse(task(2, '신청서 제출'));
+      }
+      return jsonResponse({'detail': 'unexpected $key'}, 404);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+        initialTab: 2,
+      ),
+    );
+    await tester.pumpAndSettle();
+    Finder key(String k) => find.byKey(ValueKey(k));
+
+    // 이번 달과 오늘(처음 선택된 날)
+    expect(find.text('2026년 10월'), findsOneWidget);
+    expect(find.text('10월 28일 (수)'), findsOneWidget);
+    expect(key('day-2026-10-01'), findsOneWidget);
+    expect(key('day-2026-11-01'), findsNothing);
+
+    // 표시: 28일은 미완료·완료, 26일은 완료만, 30일은 마감만
+    expect(key('todo-2026-10-28'), findsOneWidget);
+    expect(key('done-2026-10-28'), findsOneWidget);
+    expect(key('deadline-2026-10-28'), findsNothing);
+    expect(key('todo-2026-10-26'), findsNothing);
+    expect(key('done-2026-10-26'), findsOneWidget);
+    expect(key('deadline-2026-10-30'), findsOneWidget);
+
+    // 오늘의 목록(미완료가 위)과 이번 달 마감
+    double y(String title) => tester.getTopLeft(find.text(title)).dy;
+    expect(y('신청서 제출') < y('성적표 준비'), isTrue);
+    expect(find.text('이번 달 마감'), findsOneWidget);
+    expect(find.text('10/30'), findsOneWidget);
+    expect(find.text('신청 18:00'), findsOneWidget);
+    expect(find.text('D-2'), findsOneWidget);
+    expect(find.text('장학생 선발 안내'), findsNothing); // 11월 마감
+
+    // 체크하면 바로 반영되고 그날의 미완료 표시가 사라짐
+    await tester.tap(
+      find.descendant(
+        of: find.widgetWithText(MyTaskTile, '신청서 제출'),
+        matching: find.byType(Checkbox),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(requests, ['PATCH /tasks/2 {"is_done":true}']);
+    expect(key('todo-2026-10-28'), findsNothing);
+    expect(key('done-2026-10-28'), findsOneWidget);
+
+    // 다른 날짜를 누르면 그날 목록
+    await tester.tap(key('day-2026-10-30'));
+    await tester.pumpAndSettle();
+    expect(find.text('10월 30일 (금)'), findsOneWidget);
+    expect(find.text('신청서 제출'), findsNothing);
+    expect(find.text('신청 18:00'), findsNWidgets(2)); // 그날 목록과 이번 달 마감
+    await tester.tap(key('day-2026-10-29'));
+    await tester.pumpAndSettle();
+    expect(find.text('이 날은 할 일과 마감이 없어요'), findsOneWidget);
+
+    // 다음 달: 그 달의 마감, 선택은 풀림
+    await tester.tap(find.byTooltip('다음 달'));
+    await tester.pumpAndSettle();
+    expect(find.text('2026년 11월'), findsOneWidget);
+    expect(find.text('날짜를 누르면 그날의 할 일과 마감이 보여요'), findsOneWidget);
+    expect(find.text('11월 마감'), findsOneWidget);
+    expect(find.text('장학생 선발 안내'), findsOneWidget);
+    expect(find.text('D-8'), findsOneWidget);
+    expect(key('deadline-2026-11-05'), findsOneWidget);
+
+    // 이전 달로 두 번: 마감 없는 달. 이번 달로 돌아오면 오늘이 다시 선택됨
+    await tester.tap(find.byTooltip('이전 달'));
+    await tester.pumpAndSettle();
+    expect(find.text('10월 28일 (수)'), findsOneWidget);
+    await tester.tap(find.byTooltip('이전 달'));
+    await tester.pumpAndSettle();
+    expect(find.text('2026년 9월'), findsOneWidget);
+    expect(find.text('9월 마감'), findsOneWidget);
+    expect(find.text('마감이 없어요'), findsOneWidget);
+  });
+}
+
+void scheduleTests() {
+  final today = DateTime(2026, 10, 28);
+  final examRef = {
+    'id': 9,
+    'kind': 'exam',
+    'title': '자료구조 중간고사',
+    'target_date': '2026-11-12',
+  };
+  Map<String, dynamic> item(
+    int id,
+    String title,
+    String? phase,
+    String? scheduled, {
+    bool done = false,
+  }) => {
+    'id': id,
+    'title': title,
+    'note': null,
+    'phase': phase,
+    'scheduled_date': scheduled,
+    'is_done': done,
+    'source': 'user',
+  };
+
+  testWidgets('일정: 목록 → 등록(날짜 선택) → 상세에서 완료·추가·수정·삭제 → 일정 수정·삭제', (
+    tester,
+  ) async {
+    usePhoneScreen(tester);
+    final requests = <String>[];
+    var title = '자료구조 중간고사';
+    var date = '2026-11-12';
+    var tasks = [
+      item(1, '시험 범위와 출제 유형 확인', '준비', '2026-10-29'),
+      item(2, '1회독: 개념 정리', '공부', '2026-11-04'),
+      item(3, '암기 항목 최종 점검', '직전', '2026-11-11'),
+    ];
+    Map<String, dynamic> detail() => {
+      'id': 9,
+      'kind': 'exam',
+      'title': title,
+      'target_date': date,
+      'phases': ['준비', '공부', '직전'],
+      'tasks': tasks,
+    };
+    final client = MockClient((request) async {
+      final key = '${request.method} ${request.url.path}';
+      if (request.method != 'GET') requests.add('$key ${request.body}');
+      switch (key) {
+        case 'GET /schedules':
+          requests.add(key);
+          return jsonResponse([
+            {
+              'kind': 'notice',
+              'schedule_id': null,
+              'notice_id': 1,
+              'link': 'https://example.com/1',
+              'title': '학점포기 신청 안내',
+              'date': '2026-10-30',
+              'total': 2,
+              'done': 1,
+            },
+            {
+              'kind': 'contest',
+              'schedule_id': 7,
+              'notice_id': null,
+              'link': null,
+              'title': '캡스톤 공모전',
+              'date': '2026-11-20',
+              'total': 10,
+              'done': 0,
+            },
+            {
+              'kind': 'exam',
+              'schedule_id': 8,
+              'notice_id': null,
+              'link': null,
+              'title': '지난 시험',
+              'date': '2026-10-20',
+              'total': 0,
+              'done': 0,
+            },
+          ]);
+        case 'POST /schedules':
+          return jsonResponse(detail(), 201);
+        case 'GET /schedules/9':
+          return jsonResponse(detail());
+        case 'PATCH /schedules/9':
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          title = body['title'] as String;
+          date = body['target_date'] as String;
+          tasks[0] = item(1, '시험 범위와 출제 유형 확인', '준비', '2026-11-05');
+          return jsonResponse(detail());
+        case 'DELETE /schedules/9':
+          return jsonResponse(null, 204);
+        case 'POST /schedules/9/tasks':
+          final added = item(4, '스터디 모임', '공부', '2026-10-30');
+          tasks = [tasks[0], tasks[1], added, tasks[2]];
+          return jsonResponse(added, 201);
+        case 'PATCH /tasks/2':
+          tasks[1] = item(2, '1회독: 개념 정리', '공부', '2026-11-04', done: true);
+          return jsonResponse(tasks[1]);
+        case 'PATCH /tasks/3':
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          final i = tasks.indexWhere((t) => t['id'] == 3);
+          tasks[i] = item(
+            3,
+            body['title'] as String,
+            '직전',
+            body['scheduled_date'] as String?,
+          );
+          return jsonResponse(tasks[i]);
+        case 'DELETE /tasks/4':
+          tasks.removeWhere((t) => t['id'] == 4);
+          return jsonResponse(null, 204);
+      }
+      return jsonResponse({'detail': 'unexpected $key'}, 404);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+        initialTab: 3,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 목록: 출처 태그, D-day, 진행률
+    for (final tag in ['공지', '공모전', '시험']) {
+      expect(find.widgetWithText(Tag, tag), findsOneWidget);
+    }
+    expect(find.text('D-2 · 10/30'), findsOneWidget);
+    expect(find.text('1/2 완료'), findsOneWidget);
+    expect(find.text('D-23 · 11/20'), findsOneWidget);
+    expect(find.text('지남 · 10/20'), findsOneWidget);
+    expect(find.text('할 일 없음'), findsOneWidget);
+
+    // 등록: 제목과 날짜가 있어야 '등록'이 켜짐. 날짜는 달력 창에서 고름
+    await tester.tap(find.text('일정 추가'));
+    await tester.pumpAndSettle();
+    FilledButton submit(String label) =>
+        tester.widget(find.widgetWithText(FilledButton, label));
+    expect(submit('등록').onPressed, isNull);
+    await tester.enterText(find.byType(TextField), '자료구조 중간고사');
+    await tester.tap(find.text('시험일 선택'));
+    await tester.pumpAndSettle();
+    expect(find.text('2026년 10월'), findsOneWidget);
+    await tester.tap(find.byTooltip('다음 달'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-2026-11-12')));
+    await tester.pumpAndSettle();
+    expect(find.text('시험일 2026-11-12'), findsOneWidget);
+    await tester.tap(find.text('등록'));
+    await tester.pumpAndSettle();
+    expect(
+      requests.last,
+      'POST /schedules {"kind":"exam","title":"자료구조 중간고사","target_date":"2026-11-12","use_checklist":true}',
+    );
+
+    // 상세: D-day, 진행률, 단계별 묶음, '직접 추가' 표시
+    expect(find.text('D-15 · 시험일 11/12'), findsOneWidget);
+    expect(find.text('3개 중 0개 완료'), findsOneWidget);
+    double y(String text) => tester.getTopLeft(find.text(text)).dy;
+    expect(y('준비') < y('시험 범위와 출제 유형 확인'), isTrue);
+    expect(y('시험 범위와 출제 유형 확인') < y('공부'), isTrue);
+    expect(y('공부') < y('1회독: 개념 정리'), isTrue);
+    expect(y('1회독: 개념 정리') < y('직전'), isTrue);
+    expect(find.text('10/29에 하기'), findsOneWidget);
+    expect(find.text('직접 추가'), findsNWidgets(3));
+
+    Finder tile(String title) =>
+        find.ancestor(of: find.text(title), matching: find.byType(Card));
+    Finder inTile(String title, Finder what) =>
+        find.descendant(of: tile(title), matching: what);
+
+    // 완료
+    await tester.tap(inTile('1회독: 개념 정리', find.byType(Checkbox)));
+    await tester.pumpAndSettle();
+    expect(requests.last, 'PATCH /tasks/2 {"is_done":true}');
+    expect(find.text('3개 중 1개 완료'), findsOneWidget);
+    expect(find.text('33%'), findsOneWidget);
+
+    // 항목 추가: 단계와 예정일을 고름
+    await tester.ensureVisible(find.text('항목 추가'));
+    await tester.tap(find.text('항목 추가'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '스터디 모임');
+    await tester.tap(find.text('공부').last);
+    await tester.tap(find.text('예정일 선택'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-2026-10-30')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    expect(
+      requests.last,
+      'POST /schedules/9/tasks {"title":"스터디 모임","phase":"공부","scheduled_date":"2026-10-30"}',
+    );
+    expect(find.text('4개 중 1개 완료'), findsOneWidget);
+    expect(y('1회독: 개념 정리') < y('스터디 모임'), isTrue);
+    expect(y('스터디 모임') < y('직전'), isTrue);
+
+    // 항목 수정: 제목과 예정일
+    await tester.ensureVisible(inTile('암기 항목 최종 점검', find.byTooltip('수정')));
+    await tester.tap(inTile('암기 항목 최종 점검', find.byTooltip('수정')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '암기 항목 점검');
+    await tester.tap(find.text('예정일 2026-11-11'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-2026-11-10')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    expect(
+      requests.last,
+      'PATCH /tasks/3 {"title":"암기 항목 점검","scheduled_date":"2026-11-10"}',
+    );
+    expect(find.text('11/10에 하기'), findsOneWidget);
+
+    // 항목 삭제 (확인 창)
+    await tester.ensureVisible(inTile('스터디 모임', find.byTooltip('삭제')));
+    await tester.tap(inTile('스터디 모임', find.byTooltip('삭제')));
+    await tester.pumpAndSettle();
+    expect(find.text('항목을 삭제할까요?'), findsOneWidget);
+    await tester.tap(find.text('삭제'));
+    await tester.pumpAndSettle();
+    expect(requests.last, 'DELETE /tasks/4 ');
+    expect(find.text('스터디 모임'), findsNothing);
+
+    // 일정 수정: 날짜를 바꾸면 서버가 다시 계산한 예정일이 보임
+    await tester.tap(find.byTooltip('일정 수정'));
+    await tester.pumpAndSettle();
+    expect(find.text('일정 수정'), findsOneWidget);
+    await tester.tap(find.text('시험일 2026-11-12'));
+    await tester.pumpAndSettle();
+    expect(find.text('2026년 11월'), findsOneWidget); // 지금 날짜의 달부터
+    await tester.tap(find.byKey(const ValueKey('pick-2026-11-19')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('저장'));
+    await tester.pumpAndSettle();
+    expect(
+      requests.last,
+      'PATCH /schedules/9 {"title":"자료구조 중간고사","target_date":"2026-11-19"}',
+    );
+    expect(find.text('D-22 · 시험일 11/19'), findsOneWidget);
+    expect(find.text('11/5에 하기'), findsOneWidget);
+
+    // 일정 삭제 (확인 창) → 목록으로 돌아와 다시 불러옴
+    await tester.tap(find.byTooltip('일정 삭제'));
+    await tester.pumpAndSettle();
+    expect(find.text('일정을 삭제할까요?'), findsOneWidget);
+    await tester.tap(find.text('삭제'));
+    await tester.pumpAndSettle();
+    expect(requests.sublist(requests.length - 2), [
+      'DELETE /schedules/9 ',
+      'GET /schedules',
+    ]);
+    expect(find.text('캡스톤 공모전'), findsOneWidget);
+  });
+
+  testWidgets('일정의 할 일: 홈·내 할 일·캘린더·주간 회고에 출처와 함께 나오고, 누르면 일정 상세', (
+    tester,
+  ) async {
+    usePhoneScreen(tester);
+    final opened = <String>[];
+    final examTask = {
+      ...myTask(50, '2회독: 문제 풀이', scheduled: '2026-10-28'),
+      'source': 'user',
+      'notice': null,
+      'schedule': examRef,
+      'deadline': {
+        'id': null,
+        'label': '시험일',
+        'deadline_date': '2026-11-12',
+        'deadline_time': null,
+      },
+    };
+    final client = MockClient((request) async {
+      switch (request.url.path) {
+        case '/tasks':
+          return jsonResponse([
+            myTask(1, '신청서 제출', date: '2026-10-30', scheduled: '2026-10-28'),
+            examTask,
+          ]);
+        case '/deadlines':
+          return jsonResponse([
+            myDeadline(10, '신청', '2026-10-30'),
+            {
+              'id': null,
+              'label': '시험일',
+              'deadline_date': '2026-11-12',
+              'deadline_time': null,
+              'notice': null,
+              'schedule': examRef,
+            },
+          ]);
+        case '/reviews/weekly':
+          return jsonResponse({
+            'week_start': '2026-10-25',
+            'week_end': '2026-10-31',
+            'planned': 2,
+            'done': 0,
+            'rate': 0.0,
+            'unfinished': [
+              {
+                'id': 50,
+                'title': '2회독: 문제 풀이',
+                'scheduled_date': '2026-10-28',
+                'notice': null,
+                'schedule': examRef,
+              },
+            ],
+            'memo': null,
+            'updated_at': null,
+          });
+        case '/schedules/9':
+          opened.add(request.url.path);
+          return jsonResponse({
+            ...examRef,
+            'phases': ['준비', '공부', '직전'],
+            'tasks': [item(50, '2회독: 문제 풀이', '공부', '2026-10-28')],
+          });
+      }
+      return jsonResponse([]);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+      ),
+    );
+    await tester.pumpAndSettle();
+    const source = '시험 · 자료구조 중간고사';
+
+    // 홈: 오늘 할 일에 출처와 함께. 가장 가까운 마감은 공지 쪽(10/30)
+    expect(find.text('D-2 · 학점포기 신청 안내'), findsOneWidget);
+    expect(find.text('2개 남음'), findsOneWidget);
+    expect(find.text(source), findsOneWidget);
+
+    // 내 할 일: 시험일이 마감으로 나오고, 누르면 일정 상세
+    await tester.tap(find.text('내 할 일').last);
+    await tester.pumpAndSettle();
+    expect(find.text(source), findsOneWidget);
+    expect(find.text('D-15 · 시험일 11/12'), findsOneWidget);
+    await tester.tap(find.text('2회독: 문제 풀이'));
+    await tester.pumpAndSettle();
+    expect(opened, ['/schedules/9']);
+    expect(find.text('1개 중 0개 완료'), findsOneWidget);
+    expect(find.text('직접 추가'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // 주간 회고의 끝내지 못한 일
+    await tester.tap(find.text('이번 주 회고'));
+    await tester.pumpAndSettle();
+    expect(find.text(source), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // 캘린더: 오늘의 할 일, 다음 달에 시험일 표시와 그 달의 마감
+    await tester.tap(find.text('캘린더'));
+    await tester.pumpAndSettle();
+    expect(find.text(source), findsOneWidget);
+    await tester.tap(find.byTooltip('다음 달'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('deadline-2026-11-12')), findsOneWidget);
+    expect(find.text(source), findsOneWidget);
+    expect(find.text('시험일'), findsOneWidget);
+    expect(find.text('D-15'), findsOneWidget);
   });
 }

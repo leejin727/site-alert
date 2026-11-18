@@ -1,8 +1,56 @@
 // 서버(serve/main.py) 응답을 담는 클래스.
 
+/// 일정 종류의 표시 이름. 공지에서 담은 것은 '공지'.
+String kindLabel(String kind) => switch (kind) {
+  'exam' => '시험',
+  'contest' => '공모전',
+  _ => '공지',
+};
+
+/// 할 일·마감이 어디서 왔는지: 공지 또는 직접 만든 일정(시험·공모전).
+class TaskSource {
+  TaskSource({
+    required this.kind,
+    required this.title,
+    this.noticeId,
+    this.noticeLink,
+    this.scheduleId,
+  });
+
+  final String kind; // notice | exam | contest
+  final String title;
+  final int? noticeId;
+  final String? noticeLink;
+  final int? scheduleId;
+
+  bool get isSchedule => scheduleId != null;
+
+  /// 카드의 출처 줄: 공지는 제목 그대로, 일정은 '시험 · 제목'
+  String get text => isSchedule ? '${kindLabel(kind)} · $title' : title;
+
+  /// 서버가 주는 `notice` / `schedule` 중 하나에서.
+  factory TaskSource.fromJson(Map<String, dynamic> json) {
+    final schedule = json['schedule'] as Map<String, dynamic>?;
+    if (schedule != null) {
+      return TaskSource(
+        kind: schedule['kind'] as String,
+        title: schedule['title'] as String,
+        scheduleId: schedule['id'] as int,
+      );
+    }
+    final notice = json['notice'] as Map<String, dynamic>;
+    return TaskSource(
+      kind: 'notice',
+      title: notice['title'] as String,
+      noticeId: notice['id'] as int,
+      noticeLink: notice['link'] as String,
+    );
+  }
+}
+
 class DeadlineInfo {
   DeadlineInfo({
-    required this.id,
+    this.id,
     required this.label,
     this.date,
     this.time,
@@ -11,7 +59,7 @@ class DeadlineInfo {
     this.evidence,
   });
 
-  final int id;
+  final int? id; // 직접 만든 일정의 날짜(시험일·마감일)는 id가 없음
   final String label;
   final String? date; // 'YYYY-MM-DD', 날짜를 특정할 수 없으면 null
   final String? time; // 'HH:MM:SS'
@@ -20,7 +68,7 @@ class DeadlineInfo {
   final String? evidence;
 
   factory DeadlineInfo.fromJson(Map<String, dynamic> json) => DeadlineInfo(
-    id: json['id'] as int,
+    id: json['id'] as int?,
     label: json['label'] as String,
     date: json['deadline_date'] as String?,
     time: json['deadline_time'] as String?,
@@ -172,9 +220,7 @@ class MyTask {
   MyTask({
     required this.id,
     required this.title,
-    required this.noticeId,
-    required this.noticeTitle,
-    required this.noticeLink,
+    required this.source,
     this.note,
     this.isDone = false,
     this.deadline,
@@ -186,23 +232,18 @@ class MyTask {
   final String title;
   final String? note;
   final bool isDone;
-  final int noticeId;
-  final String noticeTitle;
-  final String noticeLink;
+  final TaskSource source; // 어느 공지(또는 일정)의 할 일인지
   final DeadlineInfo? deadline;
   final bool deadlineFromNotice; // 할 일에 연결된 마감이 없어 공지의 가장 빠른 마감을 보여줌
   final String? scheduledDate; // 이 할 일을 할 날 (YYYY-MM-DD, 서버가 마감에서 역산해 배정)
 
   factory MyTask.fromJson(Map<String, dynamic> json) {
-    final notice = json['notice'] as Map<String, dynamic>;
     return MyTask(
       id: json['id'] as int,
       title: json['title'] as String,
       note: json['note'] as String?,
       isDone: json['is_done'] as bool? ?? false,
-      noticeId: notice['id'] as int,
-      noticeTitle: notice['title'] as String,
-      noticeLink: notice['link'] as String,
+      source: TaskSource.fromJson(json),
       deadline: json['deadline'] == null
           ? null
           : DeadlineInfo.fromJson(json['deadline'] as Map<String, dynamic>),
@@ -216,12 +257,127 @@ class MyTask {
     title: title,
     note: note,
     isDone: isDone,
-    noticeId: noticeId,
-    noticeTitle: noticeTitle,
-    noticeLink: noticeLink,
+    source: source,
     deadline: deadline,
     deadlineFromNotice: deadlineFromNotice,
     scheduledDate: scheduledDate,
+  );
+}
+
+/// 캘린더에 표시하는 마감: 내가 담은 공지의 날짜 있는 마감과, 직접 만든 일정의 날짜(시험일·마감일).
+class MyDeadline {
+  MyDeadline({
+    this.id,
+    required this.label,
+    required this.date,
+    required this.source,
+    this.time,
+  });
+
+  final int? id; // 직접 만든 일정의 날짜는 id가 없음
+  final String label;
+  final String date; // 'YYYY-MM-DD'
+  final String? time; // 'HH:MM:SS'
+  final TaskSource source;
+
+  factory MyDeadline.fromJson(Map<String, dynamic> json) => MyDeadline(
+    id: json['id'] as int?,
+    label: json['label'] as String,
+    date: json['deadline_date'] as String,
+    time: json['deadline_time'] as String?,
+    source: TaskSource.fromJson(json),
+  );
+}
+
+/// 일정 목록의 한 줄: 직접 만든 일정 또는 공지에서 담은 것.
+class ScheduleEntry {
+  ScheduleEntry({
+    required this.source,
+    required this.total,
+    required this.done,
+    this.date,
+  });
+
+  final TaskSource source;
+  final String? date; // 시험일·마감일. 공지는 가장 가까운 마감 (없으면 null)
+  final int total; // 할 일 수
+  final int done; // 그중 완료한 수
+
+  factory ScheduleEntry.fromJson(Map<String, dynamic> json) => ScheduleEntry(
+    source: TaskSource(
+      kind: json['kind'] as String,
+      title: json['title'] as String,
+      noticeId: json['notice_id'] as int?,
+      noticeLink: json['link'] as String?,
+      scheduleId: json['schedule_id'] as int?,
+    ),
+    date: json['date'] as String?,
+    total: json['total'] as int,
+    done: json['done'] as int,
+  );
+}
+
+/// 직접 만든 일정의 체크리스트 항목.
+class ScheduleTask {
+  ScheduleTask({
+    required this.id,
+    required this.title,
+    this.phase,
+    this.scheduledDate,
+    this.isDone = false,
+  });
+
+  final int id;
+  final String title;
+  final String? phase; // 단계 (준비·공부·직전 / 준비·제작·제출). 없으면 '기타'로 묶음
+  final String? scheduledDate; // YYYY-MM-DD
+  final bool isDone;
+
+  factory ScheduleTask.fromJson(Map<String, dynamic> json) => ScheduleTask(
+    id: json['id'] as int,
+    title: json['title'] as String,
+    phase: json['phase'] as String?,
+    scheduledDate: json['scheduled_date'] as String?,
+    isDone: json['is_done'] as bool? ?? false,
+  );
+
+  ScheduleTask copyWith({required bool isDone}) => ScheduleTask(
+    id: id,
+    title: title,
+    phase: phase,
+    scheduledDate: scheduledDate,
+    isDone: isDone,
+  );
+}
+
+/// 직접 만든 일정(시험·공모전)과 체크리스트.
+class ScheduleDetail {
+  ScheduleDetail({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.date,
+    required this.phases,
+    required this.tasks,
+  });
+
+  final int id;
+  final String kind; // exam | contest
+  final String title;
+  final String date; // 시험일 또는 마감일 (YYYY-MM-DD)
+  final List<String> phases; // 이 종류의 단계 순서
+  final List<ScheduleTask> tasks; // 단계 순서대로
+
+  factory ScheduleDetail.fromJson(Map<String, dynamic> json) => ScheduleDetail(
+    id: json['id'] as int,
+    kind: json['kind'] as String,
+    title: json['title'] as String,
+    date: json['target_date'] as String,
+    phases: [for (final p in json['phases'] as List) p as String],
+    tasks: [
+      for (final t in json['tasks'] as List)
+        ScheduleTask.fromJson(t as Map<String, dynamic>),
+    ],
   );
 }
 
@@ -230,19 +386,19 @@ class ReviewTask {
   ReviewTask({
     required this.id,
     required this.title,
-    required this.noticeTitle,
+    required this.sourceText,
     this.scheduledDate,
   });
 
   final int id;
   final String title;
-  final String noticeTitle;
+  final String sourceText; // 공지 제목 또는 '시험 · 일정 제목'
   final String? scheduledDate; // 하기로 했던 날 (YYYY-MM-DD)
 
   factory ReviewTask.fromJson(Map<String, dynamic> json) => ReviewTask(
     id: json['id'] as int,
     title: json['title'] as String,
-    noticeTitle: (json['notice'] as Map<String, dynamic>)['title'] as String,
+    sourceText: TaskSource.fromJson(json).text,
     scheduledDate: json['scheduled_date'] as String?,
   );
 }

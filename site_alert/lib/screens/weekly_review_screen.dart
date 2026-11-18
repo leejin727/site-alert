@@ -199,7 +199,7 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
               child: ListTile(
                 title: Text(t.title),
                 subtitle: Text(
-                  t.noticeTitle,
+                  t.sourceText,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
