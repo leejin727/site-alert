@@ -158,7 +158,7 @@ def save_analysis(session: Session, post: Post, a: NoticeAnalysis, used_model: s
     return rows, unclear
 
 
-def call_model(client, model: str, contents, schema: type[BaseModel]) -> BaseModel:
+def call_model(client, model: str, contents, schema: type[BaseModel], timeout: int | None = None) -> BaseModel:
     resp = client.models.generate_content(
         model=model,
         contents=contents,  # 텍스트(str) 또는 [텍스트, 이미지...] 목록
@@ -168,6 +168,7 @@ def call_model(client, model: str, contents, schema: type[BaseModel]) -> BaseMod
             temperature=0,
             # 함수 호출(tools)을 쓰지 않으므로 끔. 켜 두면 SDK가 'Direct use of AFC ...' 경고를 출력함
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            http_options=types.HttpOptions(timeout=timeout * 1000) if timeout else None,  # 없으면 client 설정대로
         ),
     )
     if resp.parsed is None:
@@ -204,7 +205,9 @@ def load_body(post: Post) -> tuple[str, list[str], str, list[tuple[str, bytes]]]
     return detail.text, detail.attachments, "상세페이지", []
 
 
-def analyze_post(client, board: str, post: Post) -> tuple[NoticeAnalysis, str, str, int, int]:
+def analyze_post(
+    client, board: str, post: Post, models: Sequence[str] = (MODEL, FALLBACK_MODEL), skip_after: int | None = None,
+) -> tuple[NoticeAnalysis, str, str, int, int]:
     """반환: (분석 결과, 사용 모델, 본문 출처, 본문 길이, 보낸 이미지 수)"""
     body, attachments, source, images = load_body(post)
     prompt = build_prompt(board, post.title, post.published, body, attachments)
@@ -212,16 +215,18 @@ def analyze_post(client, board: str, post: Post) -> tuple[NoticeAnalysis, str, s
     if images:
         contents = [prompt + IMAGE_NOTE.format(n=len(images))]
         contents += [types.Part.from_bytes(data=data, mime_type=mime) for mime, data in images]
-    result, used_model = run_with_retry(client, contents)
+    result, used_model = run_with_retry(client, contents, models=models, skip_after=skip_after)
     return result, used_model, source, len(body or ""), len(images)
 
 
 def run_with_retry(
     client, contents, schema: type[BaseModel] = NoticeAnalysis, models: Sequence[str] = (MODEL, FALLBACK_MODEL),
+    skip_after: int | None = None,
 ) -> tuple[BaseModel, str]:
     """재시도·대체 모델을 적용해 Gemini를 호출하고, schema 형식의 결과와 실제 사용된 모델 이름을 반환.
 
     models는 시도할 순서 (앞 모델이 계속 실패하면 다음 모델로).
+    skip_after(초)를 주면 마지막 모델이 아닌 모델은 그 시간 안에 답이 없을 때 다음 모델로 넘어감.
     """
     last_error = None
     models = list(dict.fromkeys(models))
@@ -231,11 +236,12 @@ def run_with_retry(
                 print(f"  {wait}초 기다린 뒤 다시 시도 ({model})")
                 time.sleep(wait)
             try:
-                return call_model(client, model, contents, schema), model
+                return call_model(client, model, contents, schema, skip_after if i + 1 < len(models) else None), model
             except Exception as e:
                 last_error = e
                 msg = str(e)
-                if "404" in msg:  # 모델 없음 → 재시도 무의미, 바로 대체 모델로
+                # 모델 없음·제한 시간 초과·하루 한도 소진 → 재시도 무의미, 바로 대체 모델로
+                if any(k in msg for k in ("404", "timed out", "DEADLINE_EXCEEDED", "PerDay")):
                     break
                 if not any(k in msg for k in RETRYABLE):  # 키 오류 등: 재시도해도 소용없음
                     raise

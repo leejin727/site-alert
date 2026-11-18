@@ -1,11 +1,13 @@
-"""연도 보정·확인불가·분석 저장 확인용. 사용법: python3 -m serve.test_analyze
+"""연도 보정·확인불가·분석 저장·자동 분석 흐름 확인용. 사용법: python3 -m serve.test_analyze
 
 DB 테스트는 트랜잭션 안에서 실행하고 끝나면 롤백하므로 실제 데이터는 남지 않습니다.
 """
 from datetime import date, time
+from types import SimpleNamespace
 
 from sqlmodel import Session, select
 
+from serve import analyze, scheduler
 from serve.analyze import Deadline, NoticeAnalysis, parse_published, resolve_analysis, resolve_date, save_analysis
 from serve.db import engine
 from serve.models import NoticeDeadline, Post, PostAnalysis, Site
@@ -84,9 +86,49 @@ def test_save_analysis():
         tx.rollback()
 
 
+def test_timeout_fallback():
+    calls = []
+
+    def fake_call(client, model, contents, schema, timeout=None):
+        calls.append((model, timeout))
+        if model == "느린모델":
+            raise TimeoutError("The read operation timed out")
+        if model == "한도소진모델":
+            raise RuntimeError("429 RESOURCE_EXHAUSTED quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+        return "결과"
+
+    original = analyze.call_model
+    analyze.call_model = fake_call
+    try:
+        assert analyze.run_with_retry(None, "본문", models=("느린모델", "빠른모델"), skip_after=60) == ("결과", "빠른모델")
+        assert calls == [("느린모델", 60), ("빠른모델", None)]  # 시간 초과한 모델은 다시 시도하지 않고, 마지막 모델은 제한 없이
+        calls.clear()
+        assert analyze.run_with_retry(None, "본문", models=("한도소진모델", "빠른모델")) == ("결과", "빠른모델")
+        assert len(calls) == 2  # 하루 한도가 끝난 모델은 기다렸다 다시 시도하지 않음
+    finally:
+        analyze.call_model = original
+
+
+def test_check_triggers_analysis():
+    triggered = []
+    originals = scheduler.check_site, scheduler.analyze_now
+    scheduler.analyze_now = lambda: triggered.append(True)
+    try:
+        scheduler.check_site = lambda session, site: []
+        scheduler.check_all_sites()
+        assert not triggered
+        scheduler.check_site = lambda session, site: [SimpleNamespace(title="새 글", link="x")]
+        scheduler.check_all_sites()
+        assert triggered
+    finally:
+        scheduler.check_site, scheduler.analyze_now = originals
+
+
 if __name__ == "__main__":
     test_parse_published()
     test_resolve_date()
     test_resolve_analysis()
     test_save_analysis()
+    test_timeout_fallback()
+    test_check_triggers_analysis()
     print("OK")
