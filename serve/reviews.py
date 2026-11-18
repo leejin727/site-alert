@@ -9,8 +9,8 @@ from typing import Optional
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
-from serve.models import Post, Task, WeeklyReview, now_utc
-from serve.rss import homepage_url
+from serve.models import Post, Schedule, Task, WeeklyReview, now_utc
+from serve.tasks import task_source
 from serve.schedule import today_kst
 
 MEMO_MAX_LENGTH = 2000
@@ -25,12 +25,13 @@ def week_range(day: date) -> tuple[date, date]:
 def weekly_review(session: Session, user_id: int, day: Optional[date]) -> dict:
     start, end = week_range(day or today_kst())
     rows = session.exec(
-        select(Task, Post)
-        .join(Post, Task.notice_id == Post.id)
+        select(Task, Post, Schedule)
+        .outerjoin(Post, Task.notice_id == Post.id)
+        .outerjoin(Schedule, Task.schedule_id == Schedule.id)
         .where(Task.user_id == user_id, Task.status == "confirmed", Task.scheduled_date.between(start, end))
-        .order_by(Task.scheduled_date, Task.notice_id, Task.task_order, Task.id)
+        .order_by(Task.scheduled_date, Task.notice_id, Task.schedule_id, Task.task_order, Task.id)
     ).all()
-    done = sum(task.is_done for task, _ in rows)
+    done = sum(task.is_done for task, _, _ in rows)
     review = session.exec(
         select(WeeklyReview).where(WeeklyReview.user_id == user_id, WeeklyReview.week_start == start)
     ).first()
@@ -40,9 +41,9 @@ def weekly_review(session: Session, user_id: int, day: Optional[date]) -> dict:
         "unfinished": [
             {
                 "id": task.id, "title": task.title, "scheduled_date": task.scheduled_date,
-                "notice": {"id": post.id, "title": post.title, "link": homepage_url(post.link)},
+                **task_source(post, schedule),
             }
-            for task, post in rows if not task.is_done
+            for task, post, schedule in rows if not task.is_done
         ],
         "memo": review.memo if review else None,
         "updated_at": review.updated_at if review else None,

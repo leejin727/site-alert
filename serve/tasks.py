@@ -18,9 +18,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, delete, func, select
 
 from serve.analyze import FALLBACK_MODEL, MODEL, load_body, run_with_retry
-from serve.models import NoticeDeadline, Post, PostAnalysis, Site, Task, TaskBreakdown, now_utc
+from serve.models import NoticeDeadline, Post, PostAnalysis, Schedule, Site, Task, TaskBreakdown, now_utc
 from serve.rss import homepage_url
-from serve.schedule import plan_dates, today_kst
+from serve.schedule import DATE_LABELS, plan_dates, today_kst
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -258,40 +258,84 @@ def reschedule(session: Session, user_id: int, notice_id: int) -> None:
         session.add(task)
 
 
-def list_confirmed_tasks(session: Session, user_id: int) -> list[dict]:
-    """'내 할 일': confirmed 할 일(완료 포함)을 마감이 가까운 순으로.
+def task_source(post: Optional[Post], schedule: Optional[Schedule]) -> dict:
+    """할 일이 어디서 왔는지: 공지 또는 직접 만든 일정 (둘 중 하나만 있음)."""
+    return {
+        "notice": post and {"id": post.id, "title": post.title, "link": homepage_url(post.link)},
+        "schedule": schedule and {
+            "id": schedule.id, "kind": schedule.kind, "title": schedule.title, "target_date": schedule.target_date,
+        },
+    }
 
-    할 일에 연결된 마감이 없으면 그 공지의 가장 빠른 마감을 쓰고(deadline_from_notice=true), 공지에도 없으면 맨 뒤.
+
+def list_confirmed_tasks(session: Session, user_id: int) -> list[dict]:
+    """'내 할 일': confirmed 할 일(완료 포함)을 마감이 가까운 순으로. 공지 할 일과 직접 만든 일정의 할 일을 함께.
+
+    공지 할 일에 연결된 마감이 없으면 그 공지의 가장 빠른 마감을 쓰고(deadline_from_notice=true), 공지에도 없으면 맨 뒤.
+    일정의 할 일은 일정 날짜(시험일·마감일)가 마감.
     """
     rows = session.exec(
-        select(Task, Post)
-        .join(Post, Task.notice_id == Post.id)
+        select(Task, Post, Schedule)
+        .outerjoin(Post, Task.notice_id == Post.id)
+        .outerjoin(Schedule, Task.schedule_id == Schedule.id)
         .where(Task.user_id == user_id, Task.status == "confirmed")
     ).all()
-    deadlines = task_deadlines(session, [task for task, _ in rows])
+    deadlines = task_deadlines(session, [task for task, post, _ in rows if post])
 
     items = []
-    for task, post in rows:
-        deadline, from_notice = deadlines[task.id]
+    for task, post, schedule in rows:
+        if schedule:
+            due_date, due_time, from_notice = schedule.target_date, None, False
+            deadline = {"id": None, "label": DATE_LABELS[schedule.kind], "deadline_date": due_date, "deadline_time": None}
+        else:
+            found, from_notice = deadlines[task.id]
+            due_date, due_time = (found.deadline_date, found.deadline_time) if found else (None, None)
+            deadline = found and {
+                "id": found.id, "label": found.label, "deadline_date": found.deadline_date, "deadline_time": found.deadline_time,
+            }
         items.append({
             "id": task.id, "title": task.title, "note": task.note, "is_done": task.is_done, "done_at": task.done_at,
-            "source": task.source, "scheduled_date": task.scheduled_date,
-            "notice": {"id": post.id, "title": post.title, "link": homepage_url(post.link)},
-            "deadline": deadline and {
-                "id": deadline.id, "label": deadline.label, "deadline_date": deadline.deadline_date, "deadline_time": deadline.deadline_time,
-            },
+            "source": task.source, "scheduled_date": task.scheduled_date, "phase": task.phase,
+            **task_source(post, schedule),
+            "deadline": deadline,
             "deadline_from_notice": from_notice,
             "_sort": (
-                deadline is None,
-                deadline.deadline_date if deadline else date.max,
-                (deadline and deadline.deadline_time) or time.max,  # 시각이 없으면 그날의 맨 뒤
-                post.id, task.task_order, task.id,
+                due_date is None,
+                due_date or date.max,
+                due_time or time.max,  # 시각이 없으면 그날의 맨 뒤
+                (0, post.id) if post else (1, schedule.id), task.task_order, task.id,
             ),
         })
     items.sort(key=lambda item: item["_sort"])
     for item in items:
         del item["_sort"]
     return items
+
+
+def list_confirmed_deadlines(session: Session, user_id: int) -> list[dict]:
+    """캘린더용: 내가 담은(confirmed 할 일이 있는) 공지의 날짜 있는 마감 전부(할 일에 연결되지 않은 마감도 포함)와 직접 만든 일정의 날짜."""
+    notice_ids = select(Task.notice_id).where(Task.user_id == user_id, Task.status == "confirmed", Task.notice_id.is_not(None))
+    rows = session.exec(
+        select(NoticeDeadline, Post)
+        .join(Post, NoticeDeadline.notice_id == Post.id)
+        .where(NoticeDeadline.notice_id.in_(notice_ids), NoticeDeadline.deadline_date.is_not(None))
+    ).all()
+    items = [
+        {
+            "id": deadline.id, "label": deadline.label,
+            "deadline_date": deadline.deadline_date, "deadline_time": deadline.deadline_time,
+            **task_source(post, None),
+        }
+        for deadline, post in rows
+    ] + [
+        {
+            "id": None, "label": DATE_LABELS[schedule.kind], "deadline_date": schedule.target_date, "deadline_time": None,
+            **task_source(None, schedule),
+        }
+        for schedule in session.exec(select(Schedule).where(Schedule.user_id == user_id)).all()
+    ]
+    # 빠른 순. 같은 날은 시각 있는 것이 먼저
+    return sorted(items, key=lambda i: (i["deadline_date"], i["deadline_time"] is None, i["deadline_time"] or time.min, i["id"] or 0))
 
 
 def clean_title(title: Optional[str]) -> str:

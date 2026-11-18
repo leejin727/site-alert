@@ -5,7 +5,7 @@ Gemini 호출은 가짜 함수로 바꿔 끼우고, DB는 트랜잭션 안에서
 from datetime import date, time, timedelta
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from serve import main
 from serve import tasks
@@ -253,6 +253,20 @@ def test_my_tasks():
             assert by_title["B 신청"]["scheduled_date"] is None  # 자동 배정은 저장·추가·삭제 때만 (여기선 직접 넣은 행)
             assert by_title["B 신청"]["notice"] == {"id": b.id, "title": "공지B", "link": "https://example.com/B"}
             assert "A draft" not in by_title and "남의 할 일" not in by_title
+
+            # GET /deadlines: 담은 공지의 날짜 있는 마감 전부(할 일에 연결되지 않은 것도), 빠른 순. 같은 날은 시각 있는 것이 먼저
+            d = NoticeDeadline(notice_id=c.id, deadline_order=0, label="남의 공지", deadline_date=date(2026, 11, 1), confidence="높음")
+            session.add(d)
+            session.commit()
+            session.exec(delete(Task).where(Task.notice_id == c.id))  # C에는 내 confirmed 할 일이 없어짐
+            add(c, "C draft", status="draft")
+            add(c, "남의 C 할 일", user=999_002)
+            session.commit()
+            deadlines = [i for i in TestClient(main.app).get("/deadlines").json() if i["notice"]["id"] in (a.id, b.id, c.id)]
+            assert [(i["notice"]["title"], i["label"], i["deadline_date"], i["deadline_time"]) for i in deadlines] == [
+                ("공지B", "신청", "2026-11-05", "18:00:00"), ("공지A", "1차", "2026-11-05", None), ("공지A", "최종", "2026-12-01", None),
+            ]
+            assert deadlines[0]["notice"] == {"id": b.id, "title": "공지B", "link": "https://example.com/B"}
         finally:
             main.app.dependency_overrides.clear()
             session.close()

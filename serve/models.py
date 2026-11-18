@@ -85,20 +85,39 @@ class TaskBreakdown(SQLModel, table=True):
     generated_at: datetime = Field(default_factory=now_utc)
 
 
-class Task(SQLModel, table=True):
-    """사용자가 '이거 할래'로 담은 공지의 할 일 하나."""
-    __tablename__ = "tasks"
-    __table_args__ = (CheckConstraint("status IN ('draft', 'confirmed')", name="ck_tasks_status"),)
+class Schedule(SQLModel, table=True):
+    """사용자가 직접 만든 일정 (시험·공모전). 할 일은 tasks.schedule_id로 연결."""
+    __tablename__ = "schedules"
+    __table_args__ = (CheckConstraint("kind IN ('exam', 'contest')", name="ck_schedules_kind"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="users.id", index=True)
-    notice_id: int = Field(foreign_key="posts.id", index=True)
+    kind: str  # exam | contest
+    title: str
+    target_date: date  # 시험일 또는 마감일
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class Task(SQLModel, table=True):
+    """사용자의 할 일 하나. '이거 할래'로 담은 공지의 것(notice_id)이거나 직접 만든 일정의 것(schedule_id)."""
+    __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'confirmed')", name="ck_tasks_status"),
+        CheckConstraint("(notice_id IS NULL) <> (schedule_id IS NULL)", name="ck_tasks_owner"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    notice_id: Optional[int] = Field(default=None, foreign_key="posts.id", index=True)
+    schedule_id: Optional[int] = Field(default=None, foreign_key="schedules.id", index=True, ondelete="CASCADE")
+    phase: Optional[str] = None  # 일정 체크리스트의 단계 (준비·공부·직전 / 준비·제작·제출)
+    days_before: Optional[int] = None  # 기본 체크리스트 항목: 일정 날짜 며칠 전에 할 일인지 (날짜가 바뀌면 다시 계산)
     # 다시 분석해서 마감이 사라지면 연결만 끊음 (할 일과 사용자 체크는 유지)
     deadline_id: Optional[int] = Field(default=None, foreign_key="notice_deadlines.id", ondelete="SET NULL")
     title: str
     note: Optional[str] = None  # 사용자 메모 (AI는 채우지 않음)
     task_order: int
-    source: str = Field(default="ai", sa_column_kwargs={"server_default": "ai"})  # ai: 분해 결과에서 옴, user: 사용자가 직접 추가
+    source: str = Field(default="ai", sa_column_kwargs={"server_default": "ai"})  # ai: 분해 결과에서 옴, user: 사용자가 직접 추가 (일정의 할 일은 모두 user)
     evidence: Optional[str] = None  # ai 항목은 반드시 있음 (task_breakdowns에서 복사). user 항목은 없음
     scheduled_date: Optional[date] = None  # 자동 배정(tasks.reschedule, 규칙은 schedule.py) 또는 사용자가 정한 날짜
     is_done: bool = False
@@ -148,3 +167,22 @@ class TaskUpdate(SQLModel):
 
 class ReviewUpdate(SQLModel):
     memo: Optional[str] = None
+
+
+class ScheduleCreate(SQLModel):
+    kind: str
+    title: str
+    target_date: date
+    use_checklist: bool = True  # 기본 체크리스트로 시작
+
+
+class ScheduleUpdate(SQLModel):
+    """보낸 필드만 바뀜."""
+    title: Optional[str] = None
+    target_date: Optional[date] = None
+
+
+class ScheduleTaskCreate(SQLModel):
+    title: str
+    phase: Optional[str] = None
+    scheduled_date: Optional[date] = None

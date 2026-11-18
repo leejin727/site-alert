@@ -8,11 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, delete, select
 
 from serve.db import get_session
-from serve.models import NoticeDeadline, Post, PostAnalysis, ReviewUpdate, Site, SiteCreate, Task, TaskBreakdown, TaskCreate, TaskUpdate
+from serve.models import (
+    NoticeDeadline, Post, PostAnalysis, ReviewUpdate, Schedule, ScheduleCreate, ScheduleTaskCreate, ScheduleUpdate,
+    Site, SiteCreate, Task, TaskBreakdown, TaskCreate, TaskUpdate,
+)
+from serve.planner import (
+    add_schedule_task, create_schedule, delete_schedule, get_schedule, list_schedules, schedule_detail, update_schedule,
+)
 from serve.reviews import save_memo, weekly_review
 from serve.rss import FeedError, check_site, create_site, homepage_url
+from serve.schedule import today_kst
 from serve.scheduler import check_all_sites, start_scheduler, stop_scheduler
-from serve.tasks import BreakdownError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_tasks, prepare_tasks, reschedule
+from serve.tasks import BreakdownError, NotAnalyzedError, add_task, apply_update, confirm_tasks, list_confirmed_deadlines, list_confirmed_tasks, prepare_tasks, reschedule
 
 FIXED_USER_ID = 1  # alembic 0003에서 만든 사용자
 
@@ -176,6 +183,12 @@ def my_tasks(session: Session = Depends(get_session), user_id: int = Depends(cur
     return list_confirmed_tasks(session, user_id)
 
 
+@app.get("/deadlines")
+def my_deadlines(session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    """캘린더: 내가 담은 공지의 날짜 있는 마감을 빠른 순으로."""
+    return list_confirmed_deadlines(session, user_id)
+
+
 @app.post("/notices/{notice_id}/tasks")
 def create_tasks(
     notice_id: int,
@@ -229,7 +242,8 @@ def delete_task(
 ):
     task = get_my_task(session, task_id, user_id)
     session.delete(task)
-    reschedule(session, user_id, task.notice_id)
+    if task.notice_id is not None:  # 일정의 할 일은 항목마다 날짜가 정해져 있어 다시 배정하지 않음
+        reschedule(session, user_id, task.notice_id)
     session.commit()
 
 
@@ -249,6 +263,67 @@ def update_task(
     session.commit()
     session.refresh(task)
     return task
+
+
+def get_my_schedule(session: Session, schedule_id: int, user_id: int) -> Schedule:
+    schedule = get_schedule(session, user_id, schedule_id)
+    if not schedule:
+        raise HTTPException(404, "일정을 찾을 수 없습니다")
+    return schedule
+
+
+@app.get("/schedules")
+def my_schedules(session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    """일정 목록: 직접 만든 일정(시험·공모전)과 공지에서 담은 것을 함께."""
+    return list_schedules(session, user_id, today_kst())
+
+
+@app.post("/schedules", status_code=201)
+def create_my_schedule(data: ScheduleCreate, session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    try:
+        return create_schedule(session, user_id, data.kind, data.title, data.target_date, data.use_checklist)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/schedules/{schedule_id}")
+def my_schedule(schedule_id: int, session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    return schedule_detail(session, get_my_schedule(session, schedule_id, user_id))
+
+
+@app.patch("/schedules/{schedule_id}")
+def update_my_schedule(
+    schedule_id: int,
+    data: ScheduleUpdate,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    """제목·날짜 수정. 날짜가 바뀌면 완료하지 않은 기본 체크리스트 항목의 예정일을 다시 계산."""
+    schedule = get_my_schedule(session, schedule_id, user_id)
+    try:
+        return update_schedule(session, schedule, data.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/schedules/{schedule_id}", status_code=204)
+def delete_my_schedule(schedule_id: int, session: Session = Depends(get_session), user_id: int = Depends(current_user_id)):
+    """일정과 그 체크리스트를 함께 삭제."""
+    delete_schedule(session, get_my_schedule(session, schedule_id, user_id))
+
+
+@app.post("/schedules/{schedule_id}/tasks", status_code=201)
+def create_schedule_task(
+    schedule_id: int,
+    data: ScheduleTaskCreate,
+    session: Session = Depends(get_session),
+    user_id: int = Depends(current_user_id),
+):
+    schedule = get_my_schedule(session, schedule_id, user_id)
+    try:
+        return add_schedule_task(session, user_id, schedule, data.title, data.phase, data.scheduled_date)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/reviews/weekly")
