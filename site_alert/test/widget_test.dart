@@ -1077,6 +1077,87 @@ void calendarTests() {
     expect(deadlinesIn(deadlines, 2026, 1), isEmpty);
   });
 
+  test('그날 카드의 상태 배지: 할 일 완료 수, 모두 완료, 마감만 있는 날, 빈 날', () {
+    List<MyTask> tasks(List<bool> done) => [
+      for (final (i, d) in done.indexed)
+        MyTask.fromJson(myTask(i, '할 일', scheduled: '2026-10-28', done: d)),
+    ];
+    expect(dayStatus(tasks([true, false, false]), 1), '3개 중 1개 완료');
+    expect(dayStatus(tasks([true, true]), 0), '모두 완료');
+    expect(dayStatus([], 2), '마감 2개');
+    expect(dayStatus([], 0), isNull);
+  });
+
+  testWidgets('캘린더 그날 카드: 폭 360에서 제목과 배지가 겹치지 않고, 체크 실패 시 되돌림, 누르면 출처', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    const longTitle = '졸업요건 충족 여부를 확인하고 부족한 학점은 지도교수와 상담하기';
+    final opened = <String>[];
+    final client = MockClient((request) async {
+      final key = '${request.method} ${request.url.path}';
+      switch (key) {
+        case 'GET /tasks':
+          return jsonResponse([
+            myTask(1, longTitle, date: '2026-10-30', scheduled: '2026-10-28'),
+            myTask(
+              2,
+              '끝낸 일',
+              date: '2026-10-30',
+              scheduled: '2026-10-28',
+              done: true,
+            ),
+          ]);
+        case 'GET /deadlines':
+          return jsonResponse([
+            myDeadline(10, '서류 제출', '2026-10-28', time: '17:00:00'),
+          ]);
+        case 'PATCH /tasks/1':
+          return jsonResponse({'detail': '서버 오류'}, 500);
+        case 'POST /notices/1/tasks':
+          opened.add(key);
+          return jsonResponse(started);
+      }
+      return jsonResponse({'detail': 'unexpected $key'}, 404);
+    });
+    await tester.pumpWidget(
+      MyApp(
+        api: ApiClient(client: client, baseUrl: 'http://test'),
+        today: today,
+        initialTab: 2,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 마감 줄이 위, 배지는 제목 오른쪽에. 끝낸 할 일에는 배지가 없음
+    expect(find.text('2개 중 1개 완료'), findsOneWidget);
+    expect(find.text('D-2'), findsOneWidget);
+    final deadline = tester.getRect(find.text('서류 제출'));
+    final title = tester.getRect(find.text(longTitle));
+    expect(deadline.top < title.top, isTrue);
+    expect(
+      tester.getRect(find.text('마감 17:00')).left,
+      greaterThan(deadline.right),
+    );
+    final badge = tester.getRect(find.text('D-2'));
+    expect(badge.left, greaterThan(title.right));
+    expect(badge.right, lessThanOrEqualTo(360 - 16 - 16));
+
+    // 서버 반영 실패: 되돌리고 안내
+    await tester.tap(find.byKey(const ValueKey('check-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('반영하지 못했어요: 서버 오류'), findsOneWidget);
+    expect(find.text('2개 중 1개 완료'), findsOneWidget);
+
+    // 원이 아닌 곳을 누르면 그 공지의 미리보기
+    await tester.tap(find.text(longTitle));
+    await tester.pumpAndSettle();
+    expect(opened, ['POST /notices/1/tasks']);
+    expect(find.widgetWithText(AppBar, '이거 할래'), findsOneWidget);
+  });
+
   testWidgets('캘린더: 오늘·표시, 날짜를 누르면 그날 목록, 체크 반영, 달 이동과 그 달의 마감', (
     tester,
   ) async {
@@ -1136,23 +1217,24 @@ void calendarTests() {
     expect(find.text('장학생 선발 안내'), findsNothing); // 11월 마감
 
     // 체크하면 바로 반영되고 그날의 미완료 표시가 사라짐
-    await tester.tap(
-      find.descendant(
-        of: find.widgetWithText(MyTaskTile, '신청서 제출'),
-        matching: find.byType(Checkbox),
-      ),
-    );
+    expect(find.text('2개 중 1개 완료'), findsOneWidget);
+    await tester.tap(key('check-2'));
     await tester.pumpAndSettle();
     expect(requests, ['PATCH /tasks/2 {"is_done":true}']);
     expect(key('todo-2026-10-28'), findsNothing);
     expect(key('done-2026-10-28'), findsOneWidget);
+    expect(find.text('모두 완료'), findsOneWidget);
+    // 체크한 줄은 다시 불러오기 전까지 제자리
+    expect(y('신청서 제출') < y('성적표 준비'), isTrue);
 
     // 다른 날짜를 누르면 그날 목록
     await tester.tap(key('day-2026-10-30'));
     await tester.pumpAndSettle();
     expect(find.text('10월 30일 (금)'), findsOneWidget);
     expect(find.text('신청서 제출'), findsNothing);
-    expect(find.text('신청 18:00'), findsNWidgets(2)); // 그날 목록과 이번 달 마감
+    expect(find.text('마감 18:00'), findsOneWidget); // 그날 카드의 마감 줄
+    expect(find.text('마감 1개'), findsOneWidget);
+    expect(find.text('신청 18:00'), findsOneWidget); // 이번 달 마감
     await tester.tap(key('day-2026-10-29'));
     await tester.pumpAndSettle();
     expect(find.text('이 날은 할 일과 마감이 없어요'), findsOneWidget);

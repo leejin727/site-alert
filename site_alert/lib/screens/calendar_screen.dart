@@ -5,9 +5,10 @@ import '../api.dart';
 import '../models.dart';
 import 'home_screen.dart' show SectionHeading, sortTodayTasks;
 import 'my_tasks_screen.dart'
-    show MyTaskTile, TaskChecking, daysLeft, ddayText, monthDay;
+    show TaskChecking, daysLeft, ddayText, monthDay, urgentDays;
 import 'notice_list_screen.dart' show ErrorView, contentInset;
-import 'schedule_detail_screen.dart' show openSource;
+import 'schedule_detail_screen.dart' show openSource, scheduleDday;
+import 'task_preview_screen.dart' show Tag;
 import '../theme.dart';
 
 const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
@@ -62,6 +63,13 @@ List<MyTask> tasksOn(List<MyTask> tasks, String date) => sortTodayTasks([
     if (t.scheduledDate == date) t,
 ]);
 
+/// 그날 카드의 상태 배지. 할 일 없이 마감만 있으면 마감 수, 둘 다 없으면 null.
+String? dayStatus(List<MyTask> tasks, int deadlines) {
+  if (tasks.isEmpty) return deadlines == 0 ? null : '마감 $deadlines개';
+  final done = tasks.where((t) => t.isDone).length;
+  return done == tasks.length ? '모두 완료' : '${tasks.length}개 중 $done개 완료';
+}
+
 /// 그 달의 마감. 서버가 준 순서(빠른 순) 그대로.
 List<MyDeadline> deadlinesIn(List<MyDeadline> deadlines, int year, int month) {
   final prefix = isoDate(DateTime(year, month)).substring(0, 8); // 'YYYY-MM-'
@@ -88,6 +96,9 @@ class _CalendarScreenState extends State<CalendarScreen>
   String? _error;
   late DateTime _month = DateTime(_today.year, _today.month); // 보고 있는 달의 1일
   late String? _selected = isoDate(_today);
+  // 선택한 날의 할 일 순서. 체크한 줄이 그 자리에서 그려지도록 불러오거나 날짜를 고를 때만 다시 정함
+  List<int> _dayOrder = [];
+  bool _intro = true; // 화면이 처음 열릴 때만 이미 끝낸 항목의 체크를 차례로 그림
 
   @override
   ApiClient get taskApi => widget.api;
@@ -114,17 +125,32 @@ class _CalendarScreenState extends State<CalendarScreen>
       setState(() {
         tasks = results[0] as List<MyTask>;
         _deadlines = results[1] as List<MyDeadline>;
+        _sortDay();
       });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _intro = false);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     }
   }
 
-  void _moveMonth(int months) {
+  void _sortDay() {
+    final selected = _selected;
+    _dayOrder = [
+      if (selected != null)
+        for (final t in tasksOn(tasks ?? [], selected)) t.id,
+    ];
+  }
+
+  void _select(String? date) {
     setState(() {
-      _month = DateTime(_month.year, _month.month + months);
-      _selected = _isThisMonth ? isoDate(_today) : null;
+      _selected = date;
+      _sortDay();
     });
+  }
+
+  void _moveMonth(int months) {
+    _month = DateTime(_month.year, _month.month + months);
+    _select(_isThisMonth ? isoDate(_today) : null);
   }
 
   Future<void> _openSource(TaskSource source) async {
@@ -159,12 +185,15 @@ class _CalendarScreenState extends State<CalendarScreen>
     final today = _today;
     final marks = calendarMarks(tasks, _deadlines);
     final selected = _selected;
-    final dayTasks = selected == null ? <MyTask>[] : tasksOn(tasks, selected);
+    final byId = {for (final t in tasks) t.id: t};
+    final dayTasks = [for (final id in _dayOrder) ?byId[id]];
     final dayDeadlines = [
       for (final d in _deadlines)
         if (d.date == selected) d,
     ];
     final monthDeadlines = deadlinesIn(_deadlines, _month.year, _month.month);
+    final rowCount = dayDeadlines.length + dayTasks.length;
+    var introIndex = 0;
     return ListView(
       padding: EdgeInsets.symmetric(
         horizontal: contentInset(context),
@@ -178,42 +207,92 @@ class _CalendarScreenState extends State<CalendarScreen>
           today: today,
           selected: selected,
           marks: marks,
-          onTap: (day) => setState(() => _selected = isoDate(day)),
+          onTap: (day) => _select(isoDate(day)),
         ),
         const SizedBox(height: 8),
         const _Legend(),
-        SectionHeading(
-          selected == null ? '날짜별 보기' : _dayTitle(DateTime.parse(selected)),
+        const SizedBox(height: 16),
+        _DayCard(
+          title: selected == null
+              ? '날짜별 보기'
+              : _dayTitle(DateTime.parse(selected)),
+          status: dayStatus(dayTasks, dayDeadlines.length),
+          emptyText: selected == null
+              ? '날짜를 누르면 그날의 할 일과 마감이 보여요'
+              : '이 날은 할 일과 마감이 없어요',
+          rows: [
+            for (final (i, d) in dayDeadlines.indexed)
+              _TimelineRow(
+                marker: const _DeadlineMarker(),
+                title: d.label,
+                badge: _deadlineBadge(d, today),
+                warning: true,
+                source: d.source.text,
+                onOpen: () => _openSource(d.source),
+                first: i == 0,
+                last: i == rowCount - 1,
+              ),
+            for (final (i, t) in dayTasks.indexed)
+              _taskRow(
+                t,
+                today,
+                first: dayDeadlines.isEmpty && i == 0,
+                last: dayDeadlines.length + i == rowCount - 1,
+                introDelay: _intro && t.isDone
+                    ? _CheckCircle.introStep * introIndex++
+                    : null,
+              ),
+          ],
         ),
-        if (selected == null)
-          const Text('날짜를 누르면 그날의 할 일과 마감이 보여요')
-        else if (dayTasks.isEmpty && dayDeadlines.isEmpty)
-          const Text('이 날은 할 일과 마감이 없어요'),
-        for (final d in dayDeadlines)
-          _DeadlineTile(
-            deadline: d,
-            today: today,
-            onTap: () => _openSource(d.source),
-          ),
-        for (final t in dayTasks)
-          MyTaskTile(
-            key: ValueKey(t.id),
-            task: t,
-            today: today,
-            pending: pending.contains(t.id),
-            onChanged: (v) => toggleTask(t, v),
-            onTap: () => _openSource(t.source),
-          ),
         SectionHeading('${_isThisMonth ? '이번 달' : '${_month.month}월'} 마감'),
         if (monthDeadlines.isEmpty) const Text('마감이 없어요'),
         for (final d in monthDeadlines)
           _DeadlineTile(
             deadline: d,
             today: today,
-            showDate: true,
             onTap: () => _openSource(d.source),
           ),
       ],
+    );
+  }
+
+  /// 직접 만든 일정의 날짜(시험일·마감일)는 이름이 이미 뜻을 말하므로 남은 날을, 공지 마감은 '마감'과 시각을.
+  String _deadlineBadge(MyDeadline deadline, DateTime today) {
+    if (deadline.source.isSchedule) {
+      return scheduleDday(daysLeft(deadline.date, today));
+    }
+    final time = deadline.time;
+    return time == null ? '마감' : '마감 ${time.substring(0, 5)}';
+  }
+
+  Widget _taskRow(
+    MyTask task,
+    DateTime today, {
+    required bool first,
+    required bool last,
+    required Duration? introDelay,
+  }) {
+    final date = task.deadline?.date;
+    final days = date == null ? null : daysLeft(date, today);
+    return _TimelineRow(
+      key: ValueKey(task.id),
+      marker: _CheckCircle(
+        key: ValueKey('check-${task.id}'),
+        checked: task.isDone,
+        label: task.title,
+        introDelay: introDelay,
+        onChanged: pending.contains(task.id)
+            ? null
+            : (v) => toggleTask(task, v),
+      ),
+      title: task.title,
+      badge: task.isDone || days == null ? null : ddayText(days),
+      warning: days != null && days >= 0 && days <= urgentDays,
+      dimmed: task.isDone || (days != null && days < 0),
+      source: task.source.text,
+      onOpen: () => _openSource(task.source),
+      first: first,
+      last: last,
     );
   }
 
@@ -526,19 +605,17 @@ class _DayCell extends StatelessWidget {
   }
 }
 
-/// 마감 한 줄: 공지 제목, 마감 이름(시각), D-day. [showDate]면 앞에 날짜.
+/// 그 달의 마감 한 줄: 날짜, 공지 제목, 마감 이름(시각), D-day.
 class _DeadlineTile extends StatelessWidget {
   const _DeadlineTile({
     required this.deadline,
     required this.today,
     required this.onTap,
-    this.showDate = false,
   });
 
   final MyDeadline deadline;
   final DateTime today;
   final VoidCallback onTap;
-  final bool showDate;
 
   @override
   Widget build(BuildContext context) {
@@ -550,7 +627,7 @@ class _DeadlineTile extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: ListTile(
         onTap: onTap,
-        leading: showDate ? Text(monthDay(deadline.date)) : null,
+        leading: Text(monthDay(deadline.date)),
         title: Text(
           deadline.source.text,
           maxLines: 1,
@@ -561,4 +638,366 @@ class _DeadlineTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 선택한 날의 카드: 위에 날짜와 상태 배지, 아래에 그날의 마감과 할 일을 세로 타임라인으로.
+class _DayCard extends StatelessWidget {
+  const _DayCard({
+    required this.title,
+    required this.status,
+    required this.emptyText,
+    required this.rows,
+  });
+
+  final String title;
+  final String? status;
+  final String emptyText;
+  final List<Widget> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  if (status != null) Tag(status!),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (rows.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(emptyText),
+              ),
+            // 표시(폭 24)의 왼쪽 끝이 위의 날짜와 맞도록 누르는 영역만큼 당김
+            Padding(
+              padding: const EdgeInsets.only(
+                left: 16 - (_TimelineRow.gutter - _TimelineRow.markerSize) / 2,
+                right: 16,
+              ),
+              child: Column(children: rows),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 타임라인 한 줄: 왼쪽에 표시(체크 원·마감 네모)와 위아래 줄을 잇는 세로선, 오른쪽에 제목·배지와 출처 칸.
+class _TimelineRow extends StatelessWidget {
+  const _TimelineRow({
+    super.key,
+    required this.marker,
+    required this.title,
+    required this.source,
+    required this.onOpen,
+    required this.first,
+    required this.last,
+    this.badge,
+    this.warning = false,
+    this.dimmed = false,
+  });
+
+  final Widget marker;
+  final String title;
+  final String? badge;
+  final bool warning; // 배지를 주의를 끄는 색으로
+  final bool dimmed; // 끝냈거나 마감이 지난 할 일: 흐리게, 취소선
+  final String source;
+  final VoidCallback onOpen;
+  final bool first;
+  final bool last;
+
+  static const gutter = 44.0; // 표시를 누르는 영역
+  static const markerSize = 24.0;
+  static const _lineWidth = 1.5;
+  static const _lineGap = 4.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    final line = ColoredBox(color: theme.colorScheme.outlineVariant);
+    const markerTop = (gutter - markerSize) / 2;
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: gutter,
+            child: Stack(
+              children: [
+                if (!first)
+                  Positioned(
+                    left: (gutter - _lineWidth) / 2,
+                    width: _lineWidth,
+                    top: 0,
+                    height: markerTop - _lineGap,
+                    child: line,
+                  ),
+                if (!last)
+                  Positioned(
+                    left: (gutter - _lineWidth) / 2,
+                    width: _lineWidth,
+                    top: markerTop + markerSize + _lineGap,
+                    bottom: 0,
+                    child: line,
+                  ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  width: gutter,
+                  height: gutter,
+                  child: Center(child: marker),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: last ? 0 : 8),
+              child: InkWell(
+                onTap: onOpen,
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  // 제목 첫 줄의 가운데가 표시의 가운데에 오도록
+                  padding: const EdgeInsets.fromLTRB(2, 12, 0, 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              title,
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                decoration: dimmed
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: dimmed ? muted : null,
+                              ),
+                            ),
+                          ),
+                          if (badge != null) ...[
+                            const SizedBox(width: 8),
+                            Tag(badge!, warning: warning),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Ink(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.background,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                source,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ),
+                            Icon(Icons.chevron_right, size: 18, color: muted),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 마감 줄의 표시. 달력 칸의 마감 표시와 같은 네모.
+class _DeadlineMarker extends StatelessWidget {
+  const _DeadlineMarker();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        color: AppColors.brown,
+        borderRadius: BorderRadius.circular(3),
+      ),
+    );
+  }
+}
+
+/// 할 일 줄의 체크 원. 끝내지 않았으면 테두리만, 끝내면 원이 채워지면서 체크가 그려짐.
+class _CheckCircle extends StatefulWidget {
+  const _CheckCircle({
+    super.key,
+    required this.checked,
+    required this.label,
+    required this.onChanged,
+    this.introDelay,
+  });
+
+  final bool checked;
+  final String label; // 화면 읽기용: 할 일 제목
+  final ValueChanged<bool>? onChanged; // null이면 누를 수 없음 (서버에 반영 중)
+  final Duration? introDelay; // 화면이 처음 열릴 때 이미 끝낸 항목: 이만큼 기다렸다가 체크를 그림
+
+  static const duration = Duration(milliseconds: 300);
+  static const introStep = Duration(milliseconds: 120);
+
+  @override
+  State<_CheckCircle> createState() => _CheckCircleState();
+}
+
+class _CheckCircleState extends State<_CheckCircle>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: _CheckCircle.duration,
+  );
+  Curve _curve = Curves.linear;
+
+  double get _progress => _curve.transform(_controller.value);
+
+  @override
+  void initState() {
+    super.initState();
+    final delay = widget.introDelay;
+    if (!widget.checked) return;
+    if (delay == null) {
+      _controller.value = 1;
+      return;
+    }
+    // 기다리는 시간까지 한 애니메이션에 넣음 (타이머를 따로 두지 않음)
+    final total = delay + _CheckCircle.duration;
+    _controller.duration = total;
+    _curve = Interval(delay.inMilliseconds / total.inMilliseconds, 1);
+    _controller.forward();
+  }
+
+  @override
+  void didUpdateWidget(_CheckCircle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.checked == widget.checked) return;
+    final current = _progress;
+    _curve = Curves.linear;
+    _controller
+      ..duration = _CheckCircle.duration
+      ..value = current;
+    if (widget.checked) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final onChanged = widget.onChanged;
+    final still = MediaQuery.disableAnimationsOf(context);
+    return Semantics(
+      checked: widget.checked,
+      label: widget.label,
+      child: InkResponse(
+        onTap: onChanged == null ? null : () => onChanged(!widget.checked),
+        radius: _TimelineRow.gutter / 2,
+        child: SizedBox.square(
+          dimension: _TimelineRow.gutter,
+          child: Center(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) => CustomPaint(
+                size: const Size.square(_TimelineRow.markerSize),
+                painter: _CheckPainter(
+                  still ? (widget.checked ? 1 : 0) : _progress,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckPainter extends CustomPainter {
+  const _CheckPainter(this.progress);
+
+  final double progress; // 0 = 빈 원, 1 = 채운 원과 체크
+
+  static const _fill = Interval(0, 0.6, curve: Curves.easeOut);
+  static const _stroke = Interval(0.3, 1, curve: Curves.easeOut);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.width / 2;
+    canvas.drawCircle(
+      center,
+      radius - 0.75,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = AppColors.mutedNavy,
+    );
+    if (progress <= 0) return;
+    canvas.drawCircle(
+      center,
+      radius * _fill.transform(progress),
+      Paint()..color = AppColors.navy,
+    );
+    final unit = size.width / 24;
+    final check = Path()
+      ..moveTo(7 * unit, 12.5 * unit)
+      ..lineTo(10.5 * unit, 16 * unit)
+      ..lineTo(17 * unit, 8.5 * unit);
+    final metric = check.computeMetrics().first;
+    canvas.drawPath(
+      metric.extractPath(0, metric.length * _stroke.transform(progress)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2 * unit
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..color = AppColors.card,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CheckPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
