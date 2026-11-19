@@ -8,6 +8,7 @@ import 'my_tasks_screen.dart'
     show MyTaskTile, TaskChecking, daysLeft, ddayText, monthDay;
 import 'notice_list_screen.dart' show ErrorView, contentInset;
 import 'schedule_detail_screen.dart' show openSource;
+import '../theme.dart';
 
 const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -395,21 +396,20 @@ class _Mark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Container(
       width: size,
       height: size,
       margin: const EdgeInsets.symmetric(horizontal: 1.5),
       decoration: switch (kind) {
-        _MarkKind.todo => BoxDecoration(
-          color: scheme.primary,
+        _MarkKind.todo => const BoxDecoration(
+          color: AppColors.navy,
           shape: BoxShape.circle,
         ),
         _MarkKind.done => BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: scheme.outline, width: 1.2),
+          border: Border.all(color: AppColors.mutedNavy, width: 1.2),
         ),
-        _MarkKind.deadline => BoxDecoration(color: scheme.error),
+        _MarkKind.deadline => const BoxDecoration(color: AppColors.brown),
       },
     );
   }
@@ -463,7 +463,6 @@ class _DayCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final iso = isoDate(day);
     final m = marks;
     return Semantics(
@@ -490,16 +489,16 @@ class _DayCell extends StatelessWidget {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: selected ? scheme.secondaryContainer : null,
+                  color: selected ? AppColors.navy : null,
                   border: isToday
-                      ? Border.all(color: scheme.primary, width: 1.5)
+                      ? Border.all(color: AppColors.navy, width: 1.5)
                       : null,
                 ),
                 child: ExcludeSemantics(
                   child: Text(
                     '${day.day}',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: selected ? scheme.onSecondaryContainer : null,
+                      color: selected ? AppColors.card : null,
                     ),
                   ),
                 ),
@@ -547,7 +546,7 @@ class _DeadlineTile extends StatelessWidget {
         ? ''
         : ' ${deadline.time!.substring(0, 5)}';
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
       child: ListTile(
         onTap: onTap,

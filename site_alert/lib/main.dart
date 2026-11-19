@@ -1,12 +1,13 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'floating_tab_bar.dart';
 import 'screens/calendar_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/my_tasks_screen.dart';
 import 'screens/notice_list_screen.dart';
 import 'screens/schedule_list_screen.dart';
+import 'theme.dart';
 
 void main() {
   runApp(MyApp(api: ApiClient()));
@@ -24,13 +25,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: '이거할래',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        // 웹은 한글 폰트가 없어 실행 중에 내려받으므로 내장 폰트를 씀. 휴대폰은 기기 기본 폰트 그대로.
-        fontFamily: kIsWeb ? 'GowunDodum' : null,
-        // 웹은 본문을 가운데로 모으므로 제목도 버튼 수와 상관없이 가운데에 둠
-        appBarTheme: kIsWeb ? const AppBarTheme(centerTitle: true) : null,
-      ),
+      theme: buildAppTheme(),
       home: HomeShell(api: api, today: today, initialTab: initialTab),
     );
   }
@@ -66,33 +61,33 @@ class _HomeShellState extends State<HomeShell> {
         3 => ScheduleListScreen(api: widget.api, today: widget.today),
         _ => MyTasksScreen(api: widget.api, today: widget.today),
       },
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: FloatingTabBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
+        onSelected: (i) => setState(() => _index = i),
+        items: const [
+          TabItem(
+            icon: Icons.home_outlined,
+            selectedIcon: Icons.home,
             label: '홈',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.campaign_outlined),
-            selectedIcon: Icon(Icons.campaign),
+          TabItem(
+            icon: Icons.campaign_outlined,
+            selectedIcon: Icons.campaign,
             label: '공지',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
+          TabItem(
+            icon: Icons.calendar_month_outlined,
+            selectedIcon: Icons.calendar_month,
             label: '캘린더',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.event_note_outlined),
-            selectedIcon: Icon(Icons.event_note),
+          TabItem(
+            icon: Icons.event_note_outlined,
+            selectedIcon: Icons.event_note,
             label: '일정',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.checklist_outlined),
-            selectedIcon: Icon(Icons.checklist),
+          TabItem(
+            icon: Icons.checklist_outlined,
+            selectedIcon: Icons.checklist,
             label: '내 할 일',
           ),
         ],

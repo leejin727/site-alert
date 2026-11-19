@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api.dart';
 import '../models.dart';
 import 'notice_list_screen.dart' show ErrorView, contentInset;
+import '../theme.dart';
 
 /// '이거 할래' 미리보기: 화면을 열면 서버가 할 일을 draft로 만들고(POST), 고친 내용은 바로 반영(PATCH).
 /// '저장'을 눌러야 confirmed가 되어 '담은 할 일'이 됨 (true를 돌려주면 목록에서 안내 표시).
@@ -242,7 +243,7 @@ class _TaskPreviewScreenState extends State<TaskPreviewScreen> {
               style: theme.textTheme.titleSmall,
             ),
             if (preview.applyMethod == null || preview.applyMethod == '불명확')
-              const Tag('확인 필요'),
+              const Tag('확인 필요', warning: true),
           ],
         ),
         const SizedBox(height: 4),
@@ -365,8 +366,9 @@ class _DeadlineTile extends StatelessWidget {
                 '${deadline.label} · ${deadline.when}',
                 style: theme.textTheme.titleSmall,
               ),
-              if (deadline.yearCorrected) const Tag('연도 자동 보정'),
-              if (deadline.confidence == '낮음') const Tag('확인 필요'),
+              if (deadline.yearCorrected) const Tag('연도 자동 보정', warning: true),
+              if (deadline.confidence == '낮음')
+                const Tag('확인 필요', warning: true),
             ],
           ),
           const SizedBox(height: 4),
@@ -379,22 +381,25 @@ class _DeadlineTile extends StatelessWidget {
 
 /// 작은 이름표 (확인 필요, 출처 등).
 class Tag extends StatelessWidget {
-  const Tag(this.text, {super.key});
+  const Tag(this.text, {super.key, this.warning = false});
 
   final String text;
+  final bool warning; // 사용자가 확인해야 할 것: 주의를 끄는 색
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: scheme.tertiaryContainer,
+        color: warning ? AppColors.lightTan : AppColors.blueGrey,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         text,
-        style: TextStyle(fontSize: 12, color: scheme.onTertiaryContainer),
+        style: TextStyle(
+          fontSize: 12,
+          color: warning ? AppColors.brown : AppColors.navy,
+        ),
       ),
     );
   }
@@ -407,22 +412,21 @@ class _UnclearBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.tertiaryContainer,
+        color: AppColors.lightTan,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.warning_amber_rounded, color: scheme.onTertiaryContainer),
+          const Icon(Icons.warning_amber_rounded, color: AppColors.brown),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               '공지에서 확인하지 못한 항목이 있어요: ${labels.join(', ')}\n원문에서 직접 확인해 주세요.',
-              style: TextStyle(color: scheme.onTertiaryContainer),
+              style: const TextStyle(color: AppColors.brown),
             ),
           ),
         ],
@@ -454,7 +458,7 @@ class _TaskTile extends StatelessWidget {
       if (deadlineLabel != null) '$deadlineLabel 마감까지',
       if (task.isDone) '완료한 할 일',
     ];
-    return Card.outlined(
+    return Card(
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(

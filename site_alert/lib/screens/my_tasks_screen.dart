@@ -6,6 +6,7 @@ import '../models.dart';
 import 'notice_list_screen.dart' show ErrorView, InfoChip, contentInset;
 import 'schedule_detail_screen.dart' show openSource;
 import 'weekly_review_screen.dart';
+import '../theme.dart';
 
 const urgentDays = 3; // 마감까지 이 일수 이내(D-3 ~ D-day)면 임박으로 강조
 
@@ -225,7 +226,7 @@ class MyTaskTile extends StatelessWidget {
       shape: urgent
           ? RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: theme.colorScheme.error, width: 1.5),
+              side: const BorderSide(color: AppColors.tan, width: 1.5),
             )
           : null,
       child: InkWell(

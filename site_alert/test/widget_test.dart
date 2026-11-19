@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:site_alert/api.dart';
+import 'package:site_alert/floating_tab_bar.dart';
 import 'package:site_alert/main.dart';
 import 'package:site_alert/models.dart';
 import 'package:site_alert/screens/calendar_screen.dart';
@@ -130,6 +131,60 @@ void main() {
     final wide = await cardRect(const Size(1440, 900));
     expect((wide.left, wide.right), (360, 1080));
     expect(find.byTooltip('새로고침'), findsNothing); // 웹에서만 보이는 버튼
+  });
+
+  testWidgets('탭 바: 폭 360에서도 이름이 제 칸 안, 누르면 표시가 늘어났다 옮겨가고, 넓은 화면은 720으로 가운데', (
+    tester,
+  ) async {
+    final client = MockClient(
+      (request) async =>
+          jsonResponse(request.url.path == '/notices' ? notices : []),
+    );
+    Future<Rect> barRect(Size logicalSize) async {
+      tester.view.physicalSize = logicalSize;
+      tester.view.devicePixelRatio = 1.0;
+      await tester.pumpWidget(
+        MyApp(
+          api: ApiClient(client: client, baseUrl: 'http://test'),
+          initialTab: 1,
+          today: DateTime(2026, 10, 28),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return tester.getRect(
+        find.descendant(
+          of: find.byType(FloatingTabBar),
+          matching: find.byType(Material),
+        ),
+      );
+    }
+
+    addTearDown(tester.view.reset);
+    final bar = await barRect(const Size(360, 800));
+    expect((bar.left, bar.right, bar.bottom), (16, 344, 784));
+    final cell = (bar.width - 12) / 5;
+    const labels = ['홈', '공지', '캘린더', '일정', '내 할 일'];
+    for (var i = 0; i < labels.length; i++) {
+      final label = tester.getRect(find.text(labels[i]).last);
+      final left = bar.left + 6 + cell * i;
+      expect(label.left, greaterThanOrEqualTo(left), reason: labels[i]);
+      expect(label.right, lessThanOrEqualTo(left + cell), reason: labels[i]);
+    }
+
+    final indicator = find.byKey(const ValueKey('tab-indicator'));
+    expect(tester.getRect(indicator).left, closeTo(bar.left + 6 + cell, 0.01));
+    await tester.tap(find.text('캘린더'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(tester.getRect(indicator).width, greaterThan(cell * 1.5));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, '캘린더'), findsOneWidget);
+    final moved = tester.getRect(indicator);
+    expect(moved.left, closeTo(bar.left + 6 + cell * 2, 0.01));
+    expect(moved.width, closeTo(cell, 0.01));
+
+    final wide = await barRect(const Size(1440, 900));
+    expect((wide.left, wide.right), (360, 1080));
   });
 
   test('서버 주소: 안드로이드는 10.0.2.2, iOS 등은 127.0.0.1', () {

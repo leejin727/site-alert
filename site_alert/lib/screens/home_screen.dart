@@ -12,6 +12,7 @@ import 'notice_list_screen.dart'
 import 'schedule_detail_screen.dart' show openSource;
 import 'task_preview_screen.dart';
 import 'weekly_review_screen.dart';
+import '../theme.dart';
 
 const homeNoticeCount = 3; // '새 공지'에 보여줄 개수
 
@@ -227,7 +228,11 @@ class _HomeScreenState extends State<HomeScreen> with TaskChecking<HomeScreen> {
 
   Widget _deadlineSummary(MyTask? task, DateTime today) {
     if (task == null) {
-      return const _SummaryCard(label: '가장 가까운 마감', value: '다가오는 마감이 없어요');
+      return const _SummaryCard(
+        label: '가장 가까운 마감',
+        value: '다가오는 마감이 없어요',
+        highlight: true,
+      );
     }
     final deadline = task.deadline!;
     final time = deadline.time == null
@@ -238,6 +243,7 @@ class _HomeScreenState extends State<HomeScreen> with TaskChecking<HomeScreen> {
       value:
           '${ddayText(daysLeft(deadline.date!, today))} · ${task.source.title}',
       detail: '${deadline.label} ${monthDay(deadline.date!)}$time',
+      highlight: true,
     );
   }
 
@@ -301,18 +307,23 @@ class _SummaryCard extends StatelessWidget {
     required this.value,
     this.detail,
     this.onTap,
+    this.highlight = false,
   });
 
   final String label;
   final String value;
   final String? detail;
   final VoidCallback? onTap;
+  final bool highlight; // 화면에서 가장 중요한 요약: 진한 남색 카드
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
+    final muted = highlight
+        ? AppColors.card
+        : theme.colorScheme.onSurfaceVariant;
     return Card(
+      color: highlight ? AppColors.navy : null,
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -328,11 +339,16 @@ class _SummaryCard extends StatelessWidget {
                     Text(
                       label,
                       style: theme.textTheme.labelMedium?.copyWith(
-                        color: muted,
+                        color: highlight ? AppColors.tan : muted,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(value, style: theme.textTheme.titleMedium),
+                    Text(
+                      value,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: highlight ? AppColors.card : null,
+                      ),
+                    ),
                     if (detail != null) ...[
                       const SizedBox(height: 2),
                       Text(

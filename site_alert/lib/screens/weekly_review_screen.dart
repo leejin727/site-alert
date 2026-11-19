@@ -4,6 +4,7 @@ import '../api.dart';
 import '../models.dart';
 import 'my_tasks_screen.dart' show monthDay;
 import 'notice_list_screen.dart' show ErrorView, contentInset;
+import '../theme.dart';
 
 /// 주간 회고: 그 주(일~토)에 하기로 한 할 일의 완료율, 끝내지 못한 일, 회고 메모.
 /// 처음엔 이번 주를 열고 ← → 로 지난 주를 오감 (이번 주보다 뒤로는 못 감).
@@ -156,10 +157,15 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
         ),
         const SizedBox(height: 8),
         Card(
+          color: AppColors.navy,
+          margin: EdgeInsets.zero, // 아래 카드와 좌우를 맞춤
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: review.rate == null
-                ? const Text('이 주에 하기로 한 할 일이 없어요')
+                ? const Text(
+                    '이 주에 하기로 한 할 일이 없어요',
+                    style: TextStyle(color: AppColors.card),
+                  )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -168,14 +174,16 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
                           Expanded(
                             child: Text(
                               '${review.planned}개 중 ${review.done}개 완료',
-                              style: theme.textTheme.titleMedium,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: AppColors.card,
+                              ),
                             ),
                           ),
                           Text(
                             '${(review.rate! * 100).round()}%',
                             style: theme.textTheme.headlineSmall?.copyWith(
                               fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.primary,
+                              color: AppColors.lightTan,
                             ),
                           ),
                         ],
@@ -185,6 +193,8 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
                         value: review.rate,
                         minHeight: 8,
                         borderRadius: BorderRadius.circular(4),
+                        color: AppColors.lightTan,
+                        backgroundColor: AppColors.buttonNavy,
                       ),
                     ],
                   ),
@@ -195,7 +205,7 @@ class _WeeklyReviewScreenState extends State<WeeklyReviewScreen> {
           if (review.unfinished.isEmpty) const Text('하기로 한 일을 모두 끝냈어요'),
           for (final t in review.unfinished)
             Card(
-              margin: const EdgeInsets.only(bottom: 8),
+              margin: const EdgeInsets.only(bottom: 12),
               child: ListTile(
                 title: Text(t.title),
                 subtitle: Text(

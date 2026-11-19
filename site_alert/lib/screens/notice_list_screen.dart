@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../models.dart';
 import 'task_preview_screen.dart';
+import '../theme.dart';
 
 const contentMaxWidth = 720.0; // 넓은 화면(웹)에서 본문이 넘지 않을 폭
 // 화면을 켜 둔 동안 새 공지와 끝난 분석이 저절로 보이도록 다시 불러오는 간격
@@ -264,17 +265,12 @@ class InfoChip extends StatelessWidget {
 
   final IconData icon;
   final String text;
-  final bool urgent; // 마감 임박: 경고 색
+  final bool urgent; // 마감 임박: 주의를 끄는 색
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final background = urgent
-        ? scheme.errorContainer
-        : scheme.secondaryContainer;
-    final foreground = urgent
-        ? scheme.onErrorContainer
-        : scheme.onSecondaryContainer;
+    final background = urgent ? AppColors.lightTan : AppColors.blueGrey;
+    final foreground = urgent ? AppColors.brown : AppColors.navy;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -287,7 +283,14 @@ class InfoChip extends StatelessWidget {
           Icon(icon, size: 16, color: foreground),
           const SizedBox(width: 4),
           Flexible(
-            child: Text(text, style: TextStyle(color: foreground)),
+            child: Text(
+              text,
+              style: TextStyle(
+                color: foreground,
+                // 빨강을 쓰지 않으므로 임박은 굵기로도 구분
+                fontWeight: urgent ? FontWeight.bold : null,
+              ),
+            ),
           ),
         ],
       ),

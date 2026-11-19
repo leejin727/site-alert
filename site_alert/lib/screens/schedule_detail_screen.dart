@@ -8,6 +8,7 @@ import 'my_tasks_screen.dart' show daysLeft, ddayText, monthDay, urgentDays;
 import 'notice_list_screen.dart' show ErrorView, InfoChip, contentInset;
 import 'schedule_form_screen.dart';
 import 'task_preview_screen.dart';
+import '../theme.dart';
 
 /// 일정 날짜의 이름: 시험은 '시험일', 공모전은 '마감일'.
 String dateLabel(String kind) => kind == 'exam' ? '시험일' : '마감일';
@@ -293,11 +294,15 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
         ),
         const SizedBox(height: 12),
         Card(
+          color: AppColors.navy,
           margin: EdgeInsets.zero, // 아래 체크리스트 카드와 좌우를 맞춤
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: _tasks.isEmpty
-                ? const Text('체크리스트가 비어 있어요')
+                ? const Text(
+                    '체크리스트가 비어 있어요',
+                    style: TextStyle(color: AppColors.card),
+                  )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -306,14 +311,16 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
                           Expanded(
                             child: Text(
                               '${_tasks.length}개 중 $done개 완료',
-                              style: theme.textTheme.titleMedium,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: AppColors.card,
+                              ),
                             ),
                           ),
                           Text(
                             '${(done / _tasks.length * 100).round()}%',
                             style: theme.textTheme.headlineSmall?.copyWith(
                               fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.primary,
+                              color: AppColors.lightTan,
                             ),
                           ),
                         ],
@@ -323,6 +330,8 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
                         value: done / _tasks.length,
                         minHeight: 8,
                         borderRadius: BorderRadius.circular(4),
+                        color: AppColors.lightTan,
+                        backgroundColor: AppColors.buttonNavy,
                       ),
                     ],
                   ),
@@ -384,7 +393,7 @@ class _ChecklistTile extends StatelessWidget {
     final theme = Theme.of(context);
     final scheduled = task.scheduledDate;
     final days = scheduled == null ? null : daysLeft(scheduled, today);
-    return Card.outlined(
+    return Card(
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
