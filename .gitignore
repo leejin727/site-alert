@@ -17,3 +17,6 @@ check/
 serve/analysis_results.*
 serve/image_test_*/
 serve/extract_results/
+
+# 웹 빌드 표시 파일 (실행에 필요 없음)
+serve/web/.last_build_id
